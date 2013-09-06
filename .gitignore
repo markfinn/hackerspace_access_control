@@ -2,3 +2,5 @@ mrbus/
 *~
 *.cod
 *.lst
+*.elf
+*.o

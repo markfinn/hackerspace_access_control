@@ -1,37 +1,18 @@
 #*************************************************************************
-#Title:    MRB-AVRTEMPLATE Makefile
-#Authors:  Michael Petersen <railfan@drgw.net>
-#          Nathan Holmes <maverick@drgw.net>
-#File:     MRB-AVRTEMPLATE Makefile
+#Title:    MRB-door_terminal Makefile
+#Authors:  Mark Finn <mark@mfinn.net>
 #License:  GNU General Public License v3
 #
-#LICENSE:
-#    Copyright (C) 2012 Nathan Holmes and Michael Petersen
-#
-#    Derived from example WinAVR project Makefile
-#
-#    This program is free software; you can redistribute it and/or modify
-#    it under the terms of the GNU General Public License as published by
-#    the Free Software Foundation; either version 3 of the License, or
-#    any later version.
-#
-#    This program is distributed in the hope that it will be useful,
-#    but WITHOUT ANY WARRANTY; without even the implied warranty of
-#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#    GNU General Public License for more details.
-#    
-#    You should have received a copy of the GNU General Public License along 
-#    with this program. If not, see http://www.gnu.org/licenses/
-#    
-#*************************************************************************
+#    Derived from MRB-AVRTEMPLATE
 
-BASE_NAME = mrb-avrtemplate
+BASE_NAME = door_terminal
+MRBUSLIB = ../mrbus-lib
 
-DEVICE  = atmega48
-F_CPU   = 20000000  # Hz
-FUSE_L  = 0xD7
-FUSE_H  = 0xD4
-FUSE_E  = 0x00
+#DEVICE  = atmega48
+#F_CPU   = 20000000  # Hz
+#FUSE_L  = 0xD7
+#FUSE_H  = 0xD4
+#FUSE_E  = 0x00
 
 # ATmega164P 20MHz @ 5.0V
 #DEVICE  = atmega164p
@@ -41,11 +22,11 @@ FUSE_E  = 0x00
 #FUSE_E  = 0x04
 
 # ATmega328P 20MHz @ 5.0V
-#DEVICE  = atmega328p
-#F_CPU   = 20000000  # Hz
-#FUSE_L  = 0xD7
-#FUSE_H  = 0xD1
-#FUSE_E  = 0x04
+DEVICE  = atmega328p
+F_CPU   = 20000000  # Hz
+FUSE_L  = 0xD7
+FUSE_H  = 0xD1
+FUSE_E  = 0x04
 
 # ATmega328P 12MHz @ 3.3V
 #DEVICE  = atmega328p
@@ -79,8 +60,8 @@ FUSE_E  = 0x00
 
 # MRBus
 DEFINES = -DMRBUS
-SRCS = $(BASE_NAME).c ../../mrbus/src/mrbus-avr.c ../../mrbus/src/mrbus-crc.c
-INCS = ../../mrbus/src/mrbus.h ../../mrbus/src/mrbus-avr.h
+SRCS = $(BASE_NAME).c $(MRBUSLIB)/mrbus-avr.c $(MRBUSLIB)/mrbus-crc.c
+INCS = $(MRBUSLIB)/mrbus.h $(MRBUSLIB)/mrbus-avr.h
 
 # MRBee
 #DEFINES = -DMRBEE -DMRBEE_BAUD=115200
@@ -90,7 +71,7 @@ INCS = ../../mrbus/src/mrbus.h ../../mrbus/src/mrbus-avr.h
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) 
 
 OBJS = ${SRCS:.c=.o}
-INCLUDES = -I. -I../../mrbus/src -I../../mrbee/src
+INCLUDES = -I. -I$(MRBUSLIB)
 CFLAGS  = $(INCLUDES) -Wall -Os
 
 COMPILE = avr-gcc $(DEFINES) -DF_CPU=$(F_CPU) $(CFLAGS) -mmcu=$(DEVICE)
