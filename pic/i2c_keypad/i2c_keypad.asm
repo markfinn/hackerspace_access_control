@@ -262,8 +262,11 @@ notwrite2
 reading
  bflneq regaddress, 1, notread1
  call readkeypad
- mov keypad, databyte
+ mov keypad1, databyte
  call ack
+ call writebyte
+ mov keypad2, databyte
+ call write2ready
  call writebyte
  goto wait_start
 

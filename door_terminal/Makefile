@@ -61,12 +61,8 @@ FUSE_E  = 0x04
 # MRBus
 DEFINES = -DMRBUS
 SRCS = $(BASE_NAME).c $(MRBUSLIB)/mrbus-avr.c $(MRBUSLIB)/mrbus-crc.c
+#SRCS = mrb-avrtemplate.c $(MRBUSLIB)/mrbus-avr.c $(MRBUSLIB)/mrbus-crc.c
 INCS = $(MRBUSLIB)/mrbus.h $(MRBUSLIB)/mrbus-avr.h
-
-# MRBee
-#DEFINES = -DMRBEE -DMRBEE_BAUD=115200
-#SRCS = $(BASE_NAME).c ../../mrbus/src/mrbus-crc.c ../../mrbee/src/mrbee.c ../../mrbee/src/xbee.c
-#INCS = ../../mrbus/src/mrbus.h ../../mrbee/src/mrbee.h ../../mrbee/src/xbee.h
 
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) 
 
