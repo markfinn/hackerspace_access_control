@@ -47,10 +47,6 @@ LICENSE:
 
 
 #define KEYPADADDR (37<<1)
-
-enum KEYSTATE { KEYSTATE_WAITING=0, KEYSTATE_USERID, KEYSTATE_USERPIN, KEYSTATE_AUTHWAIT, KEYSTATE_SUCCESS, KEYSTATE_UNLOCKED, KEYSTATE_FAILURE };
-enum KEYSTATE keystate = KEYSTATE_WAITING;
-
 #define RPOOLSIZE 30
 
 uint8_t randpool[RPOOLSIZE], randpoolstart=0, randpoolend=0;
@@ -639,6 +635,137 @@ void sendEncryptedAuthRequest(uint32_t userid, uint32_t userpin)
 }
 
 
+void service_mrbus()
+{
+
+	// Handle any packets that may have come in
+	if (mrbus_state & MRBUS_RX_PKT_READY)
+		PktHandler();
+		
+	// If we have a packet to be transmitted, try to send it here
+	if(mrbus_state & MRBUS_TX_PKT_READY)
+	{
+		if (0 == mrbusPacketTransmit())
+			mrbus_state &= ~(MRBUS_TX_PKT_READY);
+	}
+
+}
+
+void service_ui()
+{
+enum KEYSTATE { KEYSTATE_WAITING=0, KEYSTATE_USERID, KEYSTATE_USERPIN, KEYSTATE_AUTHWAIT, KEYSTATE_SUCCESS, KEYSTATE_UNLOCKED, KEYSTATE_FAILURE };
+enum KEYSTATE keystate = KEYSTATE_WAITING;
+
+	if (keystate !=KEYSTATE_WAITING && keystate < KEYSTATE_AUTHWAIT && centisecs-lastkeytime > 400)
+	{
+		beepErr();
+		keystate=0;
+	}
+
+
+	if (centisecs - i2cEntropyTimer > 5)
+		addEntropy(readi2centropyreg());
+
+	int8_t key;
+	switch (keystate)
+	{
+		default:
+		case KEYSTATE_WAITING:
+			leds(0,1);
+			lock();
+			key = readKeypad();
+			if (key!=INT8_MIN)
+			{
+				lastkeytime = centisecs;
+				if(key < 10)
+				{
+					beepKey();
+					userid = key;
+				}
+				else
+				{
+					beepErr();
+					keystate=KEYSTATE_WAITING;
+				}
+			}
+
+		case KEYSTATE_USERID://reading userid
+			key = readKeypad();
+			if (key!=INT8_MIN)
+			{
+				lastkeytime = centisecs;
+				if(key == 10)
+				{
+					beepAck();
+					keystate++;
+					userpin=0;
+				}
+				else if(userid < 100000000)
+				{
+					beepKey();
+					userid = userid*10 + key;
+				}
+				else
+				{
+					beepErr();
+					keystate=KEYSTATE_WAITING;
+				}
+			}
+		break;
+
+		case KEYSTATE_USERPIN://reading pin
+			key = readKeypad();
+			if (key!=INT8_MIN)
+			{
+				lastkeytime = centisecs;
+				if(key == 10)
+				{
+					beepAck();
+					sendEncryptedAuthRequest(userid, userpin);
+					keystate++;
+				}
+				else
+				{
+					beepKey();
+					userpin = userpin*10 + key;
+				}
+			}
+		break;
+
+		case KEYSTATE_AUTHWAIT://waiting for response
+			//state will be changed by auth handler
+			if(centisecs-lastkeytime < 200)
+				break;
+			restartEncryption();
+			lock();
+			beepErr();
+			keystate=KEYSTATE_WAITING;
+		break;
+
+		case KEYSTATE_SUCCESS:
+			lastkeytime = centisecs;
+			unlock();
+			beepUnlock();
+			keystate++;
+		break;
+
+		case KEYSTATE_UNLOCKED:
+			if(centisecs-lastkeytime < 500)
+				break;
+			lock();
+			beepAck();
+			keystate=KEYSTATE_WAITING;
+		break;
+
+		case KEYSTATE_FAILURE:
+			lock();
+			beepErr();
+			keystate=KEYSTATE_WAITING;
+		break;
+
+	}
+
+}
 int main(void)
 {
 	// Application initialization
@@ -661,125 +788,14 @@ int main(void)
 
 		//not done add avr watchdog timer to entropy
 
-		// Handle any packets that may have come in
-		if (mrbus_state & MRBUS_RX_PKT_READY)
-			PktHandler();
-			
-		// If we have a packet to be transmitted, try to send it here
-		if(mrbus_state & MRBUS_TX_PKT_READY)
-		{
-			if (0 == mrbusPacketTransmit())
-				mrbus_state &= ~(MRBUS_TX_PKT_READY);
-		}
+		service_mrbus();
 
-		if (keystate !=KEYSTATE_WAITING && keystate < KEYSTATE_AUTHWAIT && centisecs-lastkeytime > 400)
-		{
-			beepErr();
-			keystate=0;
-		}
+		service_ui();
 
-
-		if (centisecs - i2cEntropyTimer > 5)
-			addEntropy(readi2centropyreg());
-
-		int8_t key;
-		switch (keystate)
-		{
-			default:
-			case KEYSTATE_WAITING:
-				leds(0,1);
-				lock();
-				key = readKeypad();
-				if (key!=INT8_MIN)
-				{
-					lastkeytime = centisecs;
-					if(key < 10)
-					{
-						beepKey();
-						userid = key;
-					}
-					else
-					{
-						beepErr();
-						keystate=KEYSTATE_WAITING;
-					}
-				}
-
-			case KEYSTATE_USERID://reading userid
-				key = readKeypad();
-				if (key!=INT8_MIN)
-				{
-					lastkeytime = centisecs;
-					if(key == 10)
-					{
-						beepAck();
-						keystate++;
-						userpin=0;
-					}
-					else if(userid < 100000000)
-					{
-						beepKey();
-						userid = userid*10 + key;
-					}
-					else
-					{
-						beepErr();
-						keystate=KEYSTATE_WAITING;
-					}
-				}
-			break;
-
-			case KEYSTATE_USERPIN://reading pin
-				key = readKeypad();
-				if (key!=INT8_MIN)
-				{
-					lastkeytime = centisecs;
-					if(key == 10)
-					{
-						beepAck();
-						sendEncryptedAuthRequest(userid, userpin);
-						keystate++;
-					}
-					else
-					{
-						beepKey();
-						userpin = userpin*10 + key;
-					}
-				}
-			break;
-
-			case KEYSTATE_AUTHWAIT://waiting for response
-				//state will be changed by auth handler
-				if(centisecs-lastkeytime < 200)
-					break;
-				restartEncryption();
-				lock();
-				beepErr();
-				keystate=KEYSTATE_WAITING;
-			break;
-
-			case KEYSTATE_SUCCESS:
-				lastkeytime = centisecs;
-				unlock();
-				beepUnlock();
-				keystate++;
-			break;
-
-			case KEYSTATE_UNLOCKED:
-				if(centisecs-lastkeytime < 500)
-					break;
-				lock();
-				beepAck();
-				keystate=KEYSTATE_WAITING;
-			break;
-
-			case KEYSTATE_FAILURE:
-				lock();
-				beepErr();
-				keystate=KEYSTATE_WAITING;
-			break;
-
-		}
+		service_i2c_beep();
+		service_i2c_led();
+		service_i2c_keypad();
+		service_i2c_entropy();
 	}
 }
 
