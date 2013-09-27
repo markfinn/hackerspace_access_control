@@ -25,7 +25,7 @@ LICENSE:
 #include <avr/eeprom.h>
 #include <avr/wdt.h>
 #include <util/delay.h>
-#include <stdbool>
+#include <stdbool.h>
 #include <stdarg.h>
 
 #ifdef MRBEE
@@ -51,12 +51,16 @@ LICENSE:
 
 uint8_t randpool[RPOOLSIZE], randpoolstart=0, randpoolend=0;
 
-uint16_t lastkeytime=0;
+uint16_t lastkeytime=0, spiTimer;
 uint32_t userid, userpin;
 
 
 uint8_t mrbus_dev_addr = 0;
 uint8_t mrbus_master_addr = 0;
+
+
+enum KEYSTATE { KEYSTATE_WAITING=0, KEYSTATE_USERID, KEYSTATE_USERPIN, KEYSTATE_AUTHWAIT, KEYSTATE_SUCCESS, KEYSTATE_UNLOCKED, KEYSTATE_FAILURE };
+enum KEYSTATE keystate = KEYSTATE_WAITING;
 
 
 // ******** Start 100 Hz Timer, 0.16% error version (Timer 0)
@@ -117,16 +121,15 @@ void addEntropy(uint8_t val)
 
 enum TWISTATE { TWI_IDLE_SUCCESS=0, TWI_IDLE_FAILURE, TWI_BUSY };
 enum TWISTATE twistate = TWI_IDLE_SUCCESS;
-uint8_t twi_i, twi_wcount, twi_rcount, *twi_waddr, *twi_raddr;
+uint8_t twi_i, twi_wcount, twi_rcount, *twi_waddr, *twi_raddr, i2c_raw[4];
 
 ISR(TWI_vect){
-	if(badone) blah;
 	switch(TWSR & 0xF8)
 	{
 	case 0x08://start
 	case 0x10://repeated start
-		if (wcount)
-			TWDR = KEYPADADDR&^1;
+		if (twi_wcount)
+			TWDR = KEYPADADDR&~1;
 		else
 			TWDR = KEYPADADDR|1;
 		TWCR = (1<<TWINT)|(1<<TWEA)|(0<<TWSTA)|(0<<TWSTO)|(1<<TWEN)|(1<<TWIE);
@@ -201,7 +204,7 @@ ISR(TWI_vect){
 
 bool i2c_setup(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp)
 {
-	if(wcount == 0 && rcount == 0 || twistate == TWI_BUSY || TWCR&(1<<TWSTO))
+	if((wcount == 0 && rcount == 0) || twistate == TWI_BUSY || TWCR&(1<<TWSTO))
 		return true;
 
 	twi_wcount=wcount;
@@ -216,67 +219,70 @@ bool i2c_setup(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp)
 }
 
 
-bool readI2CKeypadStart()
+
+
+bool waitspi()
 {
-	if(i2c_setup(1, (uint8_t[]){1}, 2, &i2c_raw))
+	spiTimer = centisecs;
+	while (twistate == TWI_BUSY)
 	{
-		addEntropy(-1);
-		return true;
+		if (centisecs - spiTimer > 10)
+			return true;
 	}
 	return false;
 }
 
-int16_t asdfreadI2CKeypadStart()
+bool i2c_run(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp)
 {
-	if(i2c_setup(1, (uint8_t[]){1}, 2, key_raw))
+	return waitspi() || i2c_setup(wcount, wp, rcount, rp) || waitspi() || twistate != TWI_IDLE_SUCCESS;
+}
+
+int16_t readI2CKeypad()
+{
+	if(i2c_run(1, (uint8_t[]){1}, 2, i2c_raw))
 	{
 		addEntropy(-1);
 		return -1;
 	}
-	addEntropy(k1);
-	addEntropy(k2);
-	return ((k1&0x0f)<<8)|k2;
+	addEntropy(i2c_raw[0]);
+	addEntropy(i2c_raw[1]);
+	return ((i2c_raw[0]&0x0f)<<8)|i2c_raw[1];
 }
 
 
-bool readi2centropyStart()
+bool readI2CEntropy()
 {
-	return i2c_setup(1, (uint8_t[]){2}, 1, key_raw);
-}
-
-uint8_t asdfreadi2centropyreg()
-{
-	uint8_t v;
-	if(i2c_writeread(KEYPADADDR, 1, 1, 2, &v))
+	if(i2c_run(1, (uint8_t[]){1}, 2, i2c_raw))
 		return 0;
-	return v;
+	return i2c_raw[0];
 }
 
 
-
-bool seti2cledStart(bool status, bool keypad)
+bool setI2CLed(bool status, bool keypad)
 {
-	if(twistate == TWI_BUSY)
+	if (waitspi())
 		return true;
-	key_raw[0]=2;
-	key_raw[1]=status?2:0 | keypad?1:0;
-	i2c_setup(2, key_raw, 0, NULL);
+	i2c_raw[0]=2;
+	i2c_raw[1]=status?2:0 | keypad?1:0;
+	i2c_run(2, i2c_raw, 0, NULL);
 	return false;
 }
 
+#define leds(s, k) setI2CLed(s, k)
 
-
-bool beepi2CStart(uint8_t halfperiod, uint16_t periods)
+bool setI2CBeep(uint8_t halfperiod, uint16_t periods)
 {
-	if(twistate == TWI_BUSY)
+	if (waitspi())
 		return true;
-	key_raw[0]=1;
-	key_raw[1]=halfperiod;
-	key_raw[2]=periods>>8;
-	key_raw[3]=periods;
-	i2c_setup(4, key_raw, 0, NULL);
+	i2c_raw[0]=1;
+	i2c_raw[1]=halfperiod;
+	i2c_raw[2]=periods>>8;
+	i2c_raw[3]=periods;
+	i2c_run(4, i2c_raw, 0, NULL);
 	return false;
 }
+
+#define beep(h, p) setI2CBeep(h, p)
 
 
 void beepErr(){
@@ -523,7 +529,8 @@ void init(void)
 #error change SCL prescaler
 #endif
 
-	PORTA=0xff;
+	//not sure here
+	GPIOR0=0xff;
 	PORTB=0xff;
 	PORTC=0xff;
 	PORTD=0xff;
@@ -653,8 +660,6 @@ void service_mrbus()
 
 void service_ui()
 {
-enum KEYSTATE { KEYSTATE_WAITING=0, KEYSTATE_USERID, KEYSTATE_USERPIN, KEYSTATE_AUTHWAIT, KEYSTATE_SUCCESS, KEYSTATE_UNLOCKED, KEYSTATE_FAILURE };
-enum KEYSTATE keystate = KEYSTATE_WAITING;
 
 	if (keystate !=KEYSTATE_WAITING && keystate < KEYSTATE_AUTHWAIT && centisecs-lastkeytime > 400)
 	{
@@ -664,7 +669,7 @@ enum KEYSTATE keystate = KEYSTATE_WAITING;
 
 
 	if (centisecs - i2cEntropyTimer > 5)
-		addEntropy(readi2centropyreg());
+		addEntropy(readI2CEntropy());
 
 	int8_t key;
 	switch (keystate)
@@ -791,11 +796,6 @@ int main(void)
 		service_mrbus();
 
 		service_ui();
-
-		service_i2c_beep();
-		service_i2c_led();
-		service_i2c_keypad();
-		service_i2c_entropy();
 	}
 }
 
