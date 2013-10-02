@@ -54,19 +54,76 @@ uint8_t randpool[RPOOLSIZE], randpoolstart=0, randpoolend=0;
 uint16_t lastkeytime=0, spiTimer;
 uint32_t userid, userpin;
 
+enum AUTHSTATE { AUTH_NONE, AUTH_SUCCESS, AUTH_FAILURE, AUTH_WAIT };
+enum AUTHSTATE authstate = AUTH_NONE;
+
 
 uint8_t mrbus_dev_addr = 0;
 uint8_t mrbus_master_addr = 0;
 
 
-enum KEYSTATE { KEYSTATE_WAITING=0, KEYSTATE_USERID, KEYSTATE_USERPIN, KEYSTATE_AUTHWAIT, KEYSTATE_SUCCESS, KEYSTATE_UNLOCKED, KEYSTATE_FAILURE };
-enum KEYSTATE keystate = KEYSTATE_WAITING;
+
+
+uint16_t centisecs=0, i2cEntropyTimer=0;
+enum TWISTATE { TWI_IDLE_SUCCESS=0, TWI_IDLE_FAILURE, TWI_BUSY };
+enum TWISTATE twistate = TWI_IDLE_SUCCESS;
+uint8_t twi_i, twi_wcount, twi_rcount, *twi_waddr, *twi_raddr, i2c_raw[4];
+
+
+
+#define beep(h, p) setI2CBeep(h, p)
+
+#define waitKey() do{\
+if(centisecs-lastkeytime < 300)\
+	goto WAITING;\
+do{key = getKeyPress();}\
+	while (key < 0);\
+}while(0)
+
+
+
+
+
+
+
+
+
+
+
+void addEntropy(uint8_t val);
+void spin();
+bool i2c_setup(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp);
+bool waitspi();
+bool i2c_run(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp);
+int16_t readI2CKeypad();
+bool readI2CEntropy();
+bool setI2CLed(bool status, bool keypad);
+bool setI2CBeep(uint8_t halfperiod, uint16_t periods);
+void beepErr();
+void beepKey();
+void beepUnlock();
+void beepAck();
+void lock();
+void unlock();
+void encryptBuffer();
+void decryptBuffer();
+void PktHandler(void);
+void init(void);
+int8_t readKeypad();
+void sendEncryptedAuthRequest(uint32_t userid, uint32_t userpin);
+void service_mrbus();
+int8_t getKeyPress();
+int main(void);
+
+
+
+
+
+
+
 
 
 // ******** Start 100 Hz Timer, 0.16% error version (Timer 0)
-
-uint16_t centisecs=0, i2cEntropyTimer=0;
-
 void initialize100HzTimer(void)
 {
 	TCNT0 = 0;
@@ -85,6 +142,7 @@ ISR(TIMER0_COMPA_vect)
 void restartEncryption(){
 //destroy the encryption tunnel if up or broken, then flag as needing a re-build in the state machine
 //not done
+	authstate = AUTH_NONE;
 }
 void addEntropy(uint8_t val)
 {
@@ -119,9 +177,6 @@ void addEntropy(uint8_t val)
 //todo save a bit of entropy to the eeprom every few hours.  reload it on start up.
 
 
-enum TWISTATE { TWI_IDLE_SUCCESS=0, TWI_IDLE_FAILURE, TWI_BUSY };
-enum TWISTATE twistate = TWI_IDLE_SUCCESS;
-uint8_t twi_i, twi_wcount, twi_rcount, *twi_waddr, *twi_raddr, i2c_raw[4];
 
 ISR(TWI_vect){
 	switch(TWSR & 0xF8)
@@ -202,6 +257,21 @@ ISR(TWI_vect){
 }
 
 
+void spin()
+{
+	service_mrbus();
+	if (centisecs - i2cEntropyTimer > 50 && twistate != TWI_BUSY)
+	{
+		i2cEntropyTimer = centisecs;
+		addEntropy(readI2CEntropy());
+	}
+
+
+}
+
+
+
+
 bool i2c_setup(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp)
 {
 	if((wcount == 0 && rcount == 0) || twistate == TWI_BUSY || TWCR&(1<<TWSTO))
@@ -226,6 +296,7 @@ bool waitspi()
 	spiTimer = centisecs;
 	while (twistate == TWI_BUSY)
 	{
+		spin();
 		if (centisecs - spiTimer > 10)
 			return true;
 	}
@@ -246,6 +317,9 @@ int16_t readI2CKeypad()
 	}
 	addEntropy(i2c_raw[0]);
 	addEntropy(i2c_raw[1]);
+	addEntropy(centisecs>>8);
+	addEntropy(centisecs);
+	addEntropy(TCNT0);
 	return ((i2c_raw[0]&0x0f)<<8)|i2c_raw[1];
 }
 
@@ -282,7 +356,6 @@ bool setI2CBeep(uint8_t halfperiod, uint16_t periods)
 	return false;
 }
 
-#define beep(h, p) setI2CBeep(h, p)
 
 
 void beepErr(){
@@ -467,8 +540,8 @@ void PktHandler(void)
 		decryptBuffer();
 		if ('a' == mrbus_rx_buffer[MRBUS_PKT_TYPE])
 		{
-			if (keystate == KEYSTATE_AUTHWAIT)
-				keystate = (mrbus_rx_buffer[6]==1)?KEYSTATE_SUCCESS:KEYSTATE_FAILURE;
+			if (authstate == AUTH_WAIT)
+				authstate = (mrbus_rx_buffer[6]==1)?AUTH_SUCCESS:AUTH_FAILURE;
 			else
 				restartEncryption();
 		}
@@ -580,20 +653,21 @@ int8_t readKeypad()
 {
 	static uint16_t last=0;
 	static uint16_t debouce=0;
-	uint16_t value = readI2CKeypad();
+	static uint16_t valuestore=0;
 	uint8_t ret=15;
 
-
-	//if keyboard read error, return no change.
-	if(value<0)
-		return INT8_MIN;
+	uint16_t value = readI2CKeypad();
 
 	//debounce the keypad by only reading so often.
-	//note that we still call readI2CKeypad() so that the entropy generation is maximized.
+	//note that we still call readI2CKeypad() so that the entropy generation and spinning is maximized.
 	//also note that this means two or more keys pressed at the same will come in as separate presses at 50ms intervals
-	if(centisecs-debouce < 5)
+
+	if (valuestore^last)//there's still more change to be converted
+		value = valuestore;
+	else if(centisecs-debouce < 5 || value < 0)//if keyboard read error, return no change.
 		return INT8_MIN;
-	debouce = centisecs;
+	else
+		debouce = centisecs;
 
 	//get the change
 	value ^= last;
@@ -625,6 +699,7 @@ int8_t readKeypad()
 
 void sendEncryptedAuthRequest(uint32_t userid, uint32_t userpin)
 {
+	authstate = AUTH_WAIT;
 	mrbus_tx_buffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 	mrbus_tx_buffer[MRBUS_PKT_DEST] = mrbus_master_addr;
 	mrbus_tx_buffer[MRBUS_PKT_LEN] = 14;
@@ -658,121 +733,24 @@ void service_mrbus()
 
 }
 
-void service_ui()
+
+int8_t getKeyPress()
 {
+	int8_t key = readKeypad();
+	if (key < 0) //key error, non, or release are all ignored
+		return INT8_MIN;
 
-	if (keystate !=KEYSTATE_WAITING && keystate < KEYSTATE_AUTHWAIT && centisecs-lastkeytime > 400)
-	{
-		beepErr();
-		keystate=0;
-	}
-
-
-	if (centisecs - i2cEntropyTimer > 5)
-		addEntropy(readI2CEntropy());
-
-	int8_t key;
-	switch (keystate)
-	{
-		default:
-		case KEYSTATE_WAITING:
-			leds(0,1);
-			lock();
-			key = readKeypad();
-			if (key!=INT8_MIN)
-			{
-				lastkeytime = centisecs;
-				if(key < 10)
-				{
-					beepKey();
-					userid = key;
-				}
-				else
-				{
-					beepErr();
-					keystate=KEYSTATE_WAITING;
-				}
-			}
-
-		case KEYSTATE_USERID://reading userid
-			key = readKeypad();
-			if (key!=INT8_MIN)
-			{
-				lastkeytime = centisecs;
-				if(key == 10)
-				{
-					beepAck();
-					keystate++;
-					userpin=0;
-				}
-				else if(userid < 100000000)
-				{
-					beepKey();
-					userid = userid*10 + key;
-				}
-				else
-				{
-					beepErr();
-					keystate=KEYSTATE_WAITING;
-				}
-			}
-		break;
-
-		case KEYSTATE_USERPIN://reading pin
-			key = readKeypad();
-			if (key!=INT8_MIN)
-			{
-				lastkeytime = centisecs;
-				if(key == 10)
-				{
-					beepAck();
-					sendEncryptedAuthRequest(userid, userpin);
-					keystate++;
-				}
-				else
-				{
-					beepKey();
-					userpin = userpin*10 + key;
-				}
-			}
-		break;
-
-		case KEYSTATE_AUTHWAIT://waiting for response
-			//state will be changed by auth handler
-			if(centisecs-lastkeytime < 200)
-				break;
-			restartEncryption();
-			lock();
-			beepErr();
-			keystate=KEYSTATE_WAITING;
-		break;
-
-		case KEYSTATE_SUCCESS:
-			lastkeytime = centisecs;
-			unlock();
-			beepUnlock();
-			keystate++;
-		break;
-
-		case KEYSTATE_UNLOCKED:
-			if(centisecs-lastkeytime < 500)
-				break;
-			lock();
-			beepAck();
-			keystate=KEYSTATE_WAITING;
-		break;
-
-		case KEYSTATE_FAILURE:
-			lock();
-			beepErr();
-			keystate=KEYSTATE_WAITING;
-		break;
-
-	}
-
+	lastkeytime = centisecs;
+	return key;	
 }
+
+
+
+
 int main(void)
 {
+	int8_t key;
+
 	// Application initialization
 	init();
 
@@ -785,18 +763,102 @@ int main(void)
 
 	sei();	
 
-	while (1)
-	{
-		addEntropy(centisecs>>8);
-		addEntropy(centisecs);
-		addEntropy(TCNT0);
+	//not done add avr watchdog timer to entropy
 
-		//not done add avr watchdog timer to entropy
 
-		service_mrbus();
 
-		service_ui();
+
+WAITING:
+
+	do{
+		leds(0,1);
+		lock();
+		key = getKeyPress();
 	}
+	while(key < 0);
+
+	if(key >= 10)
+	{
+		beepErr();
+		goto WAITING;
+	}
+
+	beepKey();
+	userid = key;
+
+	//reading userid
+	while(1)
+	{
+		waitKey(); //macro: sets key or times out to waiting
+
+		if(key == 10)
+			break;
+		else if(userid < 100000000)
+		{
+			beepKey();
+			userid = userid*10 + key;
+		}
+		else
+		{
+			beepErr();
+			goto WAITING;
+		}
+	}
+
+	beepAck();
+	userpin=0;
+
+	//reading pin
+	while(1)
+	{
+		waitKey(); //macro: sets key or times out to waiting
+
+		if(key == 10)
+			break;
+		else
+		{
+			beepKey();
+			userpin = userpin*10 + key;
+		}
+	}
+	beepAck();
+	sendEncryptedAuthRequest(userid, userpin);
+
+	//waiting for response
+	while(authstate == AUTH_WAIT)
+	{
+		spin();
+		if(centisecs-lastkeytime > 200)
+		{
+			lock();
+			beepErr();
+			restartEncryption();
+			goto WAITING;
+		}
+	}
+	if(authstate != AUTH_SUCCESS)
+	{
+		lock();
+		beepErr();
+		goto WAITING;
+	}
+
+	lastkeytime = centisecs;
+	unlock();
+	beepUnlock();
+
+	while (centisecs-lastkeytime < 500)
+	{
+		spin();
+//		if(userid == 0){}
+
+	}
+
+	lock();
+	beepAck();
+
+	goto WAITING;
+
 }
 
 
