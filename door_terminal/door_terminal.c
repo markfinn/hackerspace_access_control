@@ -53,15 +53,23 @@ uint8_t randpool[RPOOLSIZE], randpoolstart=0, randpoolend=0;
 
 uint16_t lastkeytime=0, spiTimer;
 uint32_t userid, userpin;
-
-enum AUTHSTATE { AUTH_NONE, AUTH_SUCCESS, AUTH_FAILURE, AUTH_WAIT };
-enum AUTHSTATE authstate = AUTH_NONE;
+#define AUTH_NONE 0
+#define AUTH_WAIT 1
+#define AUTH_READY 2
+#define AUTH_TIMEOUT 3
+#define AUTH_MASK_STATE (AUTH_NONE|AUTH_WAIT|AUTH_READY|AUTH_TIMEOUT)
+#define AUTH_PERMISSION_AUTHENTICATED 4
+#define AUTH_PERMISSION_ENTRY 8
+#define AUTH_PERMISSION_ADMIN 16
+#define AUTH_MASK_PERMISSION (AUTH_PERMISSION_AUTHENTICATED|AUTH_PERMISSION_ENTRY|AUTH_PERMISSION_ADMIN)
+uint8_t authstate = AUTH_NONE;
 
 
 uint8_t mrbus_dev_addr = 0;
 uint8_t mrbus_master_addr = 0;
 
 
+uint16_t currentkeystate=0;
 
 
 uint16_t centisecs=0, i2cEntropyTimer=0;
@@ -99,7 +107,7 @@ int16_t readI2CKeypad();
 bool readI2CEntropy();
 bool setI2CLed(bool status, bool keypad);
 bool setI2CBeep(uint8_t halfperiod, uint16_t periods);
-void beepErr();
+void beepErr(int n);
 void beepKey();
 void beepUnlock();
 void beepAck();
@@ -166,11 +174,14 @@ void addEntropy(uint8_t val)
 
 		uint8_t i;
 		if(randpoolstart == randpoolend)
+		{
 			for(i=0;i<RPOOLSIZE/2+(RPOOLSIZE%2?0:1);i++, h++)
 				randpool[h] ^= hash>>(7*(i%4));
+			randpoolstart=(randpoolstart+1)%RPOOLSIZE
+		}
 		else
 			for(i=0;i<3&&randpoolstart != randpoolend; i++, randpoolend=(randpoolend+1)%RPOOLSIZE)
-				randpool[randpoolend]=hash>>(8*i);
+				randpool[randpoolend]^=hash>>(8*i);
 	}
 }
 
@@ -286,6 +297,7 @@ bool i2c_setup(uint8_t wcount, uint8_t *wp, uint8_t rcount, uint8_t *rp)
 
 	//send start
 	TWCR = (1<<TWINT)|(1<<TWEA)|(1<<TWSTA)|(0<<TWSTO)|(1<<TWEN)|(1<<TWIE);
+	return false;
 }
 
 
@@ -358,24 +370,20 @@ bool setI2CBeep(uint8_t halfperiod, uint16_t periods)
 
 
 
-void beepErr(){
-	leds(1,0);
-	beep(64,1000);
-	leds(0,1);
-	beep(64,1000);
-	leds(1,0);
-	beep(64,1000);
-	leds(0,1);
-	beep(64,1000);
-	leds(1,0);
-	beep(64,1000);
-	leds(0,1);
-	beep(64,1000);
+void beepErr(int n){
+int i;
+	for(i=0;i<n;i++)
+	{
+		leds(1,0);
+		beep(45,1000);
+		leds(0,1);
+		beep(64,1000);
+	}
 }
 
 void beepKey(){	
 	leds(0,0);
-	beep(32,300);
+	beep(17,300);
 	leds(0,1);
 }
 
@@ -405,7 +413,8 @@ void encryptBuffer()
 	uint8_t i;
 	uint8_t l = mrbus_tx_buffer[MRBUS_PKT_LEN];
 	for(i = l; i>MRBUS_PKT_TYPE; i--)
-		mrbus_tx_buffer[i] = mrbus_tx_buffer[i-1]^0x55;
+		mrbus_tx_buffer[i] = mrbus_tx_buffer[i-1];
+//		mrbus_tx_buffer[i] = mrbus_tx_buffer[i-1]^0x55;
 	mrbus_tx_buffer[MRBUS_PKT_TYPE] = '$';
 	mrbus_tx_buffer[MRBUS_PKT_LEN]=l+1;
 }
@@ -415,7 +424,8 @@ void decryptBuffer()
 	uint8_t i;
 	uint8_t l = mrbus_tx_buffer[MRBUS_PKT_LEN]-1;
 	for(i = MRBUS_PKT_TYPE; i<l; i++)
-		mrbus_tx_buffer[i] = mrbus_tx_buffer[i+1]^0x55;
+//		mrbus_tx_buffer[i] = mrbus_tx_buffer[i+1]^0x55;
+		mrbus_tx_buffer[i] = mrbus_tx_buffer[i+1];
 	mrbus_tx_buffer[MRBUS_PKT_TYPE] = '$';
 	mrbus_tx_buffer[MRBUS_PKT_LEN]=l;
 }
@@ -541,7 +551,7 @@ void PktHandler(void)
 		if ('a' == mrbus_rx_buffer[MRBUS_PKT_TYPE])
 		{
 			if (authstate == AUTH_WAIT)
-				authstate = (mrbus_rx_buffer[6]==1)?AUTH_SUCCESS:AUTH_FAILURE;
+				authstate = mrbus_rx_buffer[6]&AUTH_MASK_PERMISSION|AUTH_READY;
 			else
 				restartEncryption();
 		}
@@ -558,7 +568,7 @@ void PktHandler(void)
 				beep(mrbus_rx_buffer[7],(mrbus_rx_buffer[8]<<8)|mrbus_rx_buffer[9]);
 				break;
 			case 3:
-				beepErr();
+				beepErr(mrbus_rx_buffer[7]);
 				break;
 			case 4:
 				beepKey();
@@ -651,10 +661,9 @@ void init(void)
 
 int8_t readKeypad()
 {
-	static uint16_t last=0;
 	static uint16_t debouce=0;
 	static uint16_t valuestore=0;
-	uint8_t ret=15;
+	uint8_t ret=16;
 
 	uint16_t value = readI2CKeypad();
 
@@ -662,18 +671,18 @@ int8_t readKeypad()
 	//note that we still call readI2CKeypad() so that the entropy generation and spinning is maximized.
 	//also note that this means two or more keys pressed at the same will come in as separate presses at 50ms intervals
 
-	if (valuestore^last)//there's still more change to be converted
+	if (valuestore^currentkeystate)//there's still more change to be converted
 		value = valuestore;
 	else if(centisecs-debouce < 5 || value < 0)//if keyboard read error, return no change.
-		return INT8_MIN;
+		return 0;
 	else
 		debouce = centisecs;
 
 	//get the change
-	value ^= last;
+	value ^= currentkeystate;
 
 	if(value==0)
-		return INT8_MIN;
+		return 0;
 
 	//mask all but the lowest bit in the change	
 	value &= -(int16_t)value;
@@ -685,11 +694,11 @@ int8_t readKeypad()
 	if (value & 0x5555) ret -= 1; //0101 0101 0101 0101
 
 	//if this is a key release, negate.
-	if(value&last)
+	if(value&currentkeystate)
 		ret = -ret;
 
 	//mark this key change as known
-	last ^= value;
+	currentkeystate ^= value;
 
 	return ret;
 }
@@ -699,6 +708,8 @@ int8_t readKeypad()
 
 void sendEncryptedAuthRequest(uint32_t userid, uint32_t userpin)
 {
+	if (authstate&AUTH_MASK_STATE == AUTH_WAIT)
+		restartEncryption();
 	authstate = AUTH_WAIT;
 	mrbus_tx_buffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 	mrbus_tx_buffer[MRBUS_PKT_DEST] = mrbus_master_addr;
@@ -737,10 +748,12 @@ void service_mrbus()
 int8_t getKeyPress()
 {
 	int8_t key = readKeypad();
-	if (key < 0) //key error, non, or release are all ignored
-		return INT8_MIN;
+	if (key <= 0) //key error, non, or release are all ignored
+		return -1;
 
 	lastkeytime = centisecs;
+	if(key == 10)
+		return 0;
 	return key;	
 }
 
@@ -750,6 +763,7 @@ int8_t getKeyPress()
 int main(void)
 {
 	int8_t key;
+	int8_t progmodeenterstate;
 
 	// Application initialization
 	init();
@@ -779,7 +793,7 @@ WAITING:
 
 	if(key >= 10)
 	{
-		beepErr();
+		beepErr(1);
 		goto WAITING;
 	}
 
@@ -791,18 +805,15 @@ WAITING:
 	{
 		waitKey(); //macro: sets key or times out to waiting
 
-		if(key == 10)
+		if(key == 11)
 			break;
-		else if(userid < 100000000)
+		else if(userid >= 100000000)
 		{
-			beepKey();
-			userid = userid*10 + key;
-		}
-		else
-		{
-			beepErr();
+			beepErr(1);
 			goto WAITING;
 		}
+		beepKey();
+		userid = userid*10 + key;
 	}
 
 	beepAck();
@@ -813,7 +824,7 @@ WAITING:
 	{
 		waitKey(); //macro: sets key or times out to waiting
 
-		if(key == 10)
+		if(key == 11)
 			break;
 		else
 		{
@@ -823,23 +834,44 @@ WAITING:
 	}
 	beepAck();
 	sendEncryptedAuthRequest(userid, userpin);
+	progmodeenterstate=1;
 
 	//waiting for response
-	while(authstate == AUTH_WAIT)
+	while(authstate&AUTH_MASK_STATE == AUTH_WAIT)
 	{
 		spin();
+		if (readKeypad())
+			progmodeenterstate=0;
+
 		if(centisecs-lastkeytime > 200)
 		{
 			lock();
-			beepErr();
+			beepErr(3);
 			restartEncryption();
 			goto WAITING;
 		}
 	}
-	if(authstate != AUTH_SUCCESS)
+	if(authstate&AUTH_MASK_STATE != AUTH_READY)
 	{
 		lock();
-		beepErr();
+		beepErr(4);
+		restartEncryption();
+		goto WAITING;
+	}
+
+	if(!authstate&AUTH_PERMISSION_AUTHENTICATED)
+	{
+		lock();
+		beepErr(2);
+		goto WAITING;
+	}
+
+
+	if(!authstate&AUTH_PERMISSION_ENTRY)
+	{
+		lock();
+		beepUnlock();
+		beepErr(2);
 		goto WAITING;
 	}
 
@@ -850,12 +882,83 @@ WAITING:
 	while (centisecs-lastkeytime < 500)
 	{
 		spin();
-//		if(userid == 0){}
+		key=readKeypad();
+		if(key == 0 || progmodeenterstate == 0)
+		{
+			leds(0,0);
+		}
+		else if(progmodeenterstate == 1)
+		{
+			//enter held down as far as we know so far
+			if (key==10)
+				progmodeenterstate++;
+			else
+				progmodeenterstate=0;
+		}
+		else if(progmodeenterstate == 2)
+		{
+			//enter held down, zero pushed
+			if (key==-10)
+				progmodeenterstate++;
+			else
+				progmodeenterstate=0;
+		}
+		else if(progmodeenterstate < 10)
+		{
+			//enter held down, zero pushed and released
+			if (key>0 && key < 10)
+				progmodeenterstate=10+key;
+			else if (key==10)
+				progmodeenterstate=10;
+			else 
+				progmodeenterstate=0;
+		}		
+		else if(progmodeenterstate < 20)
+		{
+			//enter held down, zero pushed and released, other number pressed
+			if (key==10-progmodeenterstate || key==-10 && progmodeenterstate==10)
+				progmodeenterstate+=10;
+			else 
+				progmodeenterstate=0;
+			
+		}
+		else if(progmodeenterstate < 30)
+		{
+			//enter held down, zero pushed and released, other number pressed and released
+			if (key==-11)
+			{
+				progmodeenterstate-=20;
+				beepAck();
+				beepUnlock();
+				leds(1,1);
+				lastkeytime = centisecs;
+				goto progmode;
+			}
+			else
+				progmodeenterstate=0;
+		}
+		if(authstate&AUTH_PERMISSION_ADMIN)
 
 	}
 
 	lock();
 	beepAck();
+
+	goto WAITING;
+
+progmode:
+	switch(progmodeenterstate)
+	{
+		case 0://unlock (3hrs or until commanded by motion sensors)
+		case 0://relock
+		case 0://password change
+		case 0://reboot
+		case 0://eeprom wipe
+		case 0://add user
+		case 0://del user
+//		waitKey(); //macro: sets key or times out to waiting
+	}
+
 
 	goto WAITING;
 
