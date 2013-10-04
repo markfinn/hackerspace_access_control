@@ -153,7 +153,7 @@ void restartEncryption(){
 	authstate = AUTH_NONE;
 }
 void addEntropy(uint8_t val)
-{
+{return;//fix me, this function kills everything
 // uses jenkins_one_at_a_time_hash
 	static uint32_t hash=0;
 	static uint8_t c=0;
@@ -177,7 +177,7 @@ void addEntropy(uint8_t val)
 		{
 			for(i=0;i<RPOOLSIZE/2+(RPOOLSIZE%2?0:1);i++, h++)
 				randpool[h] ^= hash>>(7*(i%4));
-			randpoolstart=(randpoolstart+1)%RPOOLSIZE
+			randpoolstart=(randpoolstart+1)%RPOOLSIZE;
 		}
 		else
 			for(i=0;i<3&&randpoolstart != randpoolend; i++, randpoolend=(randpoolend+1)%RPOOLSIZE)
@@ -649,8 +649,6 @@ void init(void)
 
 //		eeprom_write_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR, mrbus_dev_addr);
 
-	restartEncryption();
-	leds(0,0);
 
 }
 
@@ -780,6 +778,9 @@ int main(void)
 	//not done add avr watchdog timer to entropy
 
 
+	restartEncryption();
+	leds(0,0);
+//while(1) spin();
 
 
 WAITING:
@@ -937,7 +938,6 @@ WAITING:
 			else
 				progmodeenterstate=0;
 		}
-		if(authstate&AUTH_PERMISSION_ADMIN)
 
 	}
 
@@ -950,13 +950,14 @@ progmode:
 	switch(progmodeenterstate)
 	{
 		case 0://unlock (3hrs or until commanded by motion sensors)
-		case 0://relock
-		case 0://password change
-		case 0://reboot
-		case 0://eeprom wipe
-		case 0://add user
-		case 0://del user
-//		waitKey(); //macro: sets key or times out to waiting
+		//if(authstate&AUTH_PERMISSION_ADMIN)
+		case 1://relock
+		case 2://password change
+		case 3://reboot
+		case 4://eeprom wipe
+		case 5://add user
+		case 6://del user
+		waitKey(); //macro: sets key or times out to waiting
 	}
 
 
