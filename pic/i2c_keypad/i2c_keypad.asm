@@ -5,7 +5,7 @@
 
 DEV_ADDRESS EQU 0x37
 
-convert to wait using no prescal (periodh and periodl, plus not clearing TMR0
+;todo convert to wait using no prescal (periodh and periodl, plus not clearing TMR0
  __CONFIG _CP_OFF & _WDT_OFF & _RC_OSC
 
 ;rc@ 1.21 mips
@@ -175,10 +175,10 @@ beep.loop
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 readkeypad
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
- do
+;todo: this.
 
 
- bad idea?
+;todo bad idea?
  sfnz keypad
  retlw 0
  movfw TMR0
