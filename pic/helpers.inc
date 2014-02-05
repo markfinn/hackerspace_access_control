@@ -164,4 +164,40 @@ cbffle MACRO f1, f2, target
  bc target
  ENDM
 
+; Shift reg left
+slf macro reg
+ clr
+ crlf reg,f
+ endm
+
+scale macro reg, factor
+ if (factor == 1)
+  movwf reg ; 1 X is easy
+ else
+  scale reg, (factor / 2) ; W * (factor / 2)
+  slf reg,f ; double reg
+  if ((factor & 1) == 1) ; if lo-bit set ..
+   addwf reg,f ; .. add W to reg
+  endif
+ endif
+ endm
+
+addff32 MACRO R, A
+       movf    A#v(0),W
+        addwf   R#v(0),F
+        movf    A#V(1),W
+        btfsc   STATUS,C
+        incfsz  A#V(1),W
+        addwf   R#V(1),F
+        movf    A#V(2),W
+        btfsc   STATUS,C
+        incfsz  A#V(2),W
+        addwf   R#V(2),F
+        movf    A#V(3),W
+        btfsc   STATUS,C
+        incfsz  A#V(3),W
+        addwf   R#V(3),F
+ endm
+
+
 

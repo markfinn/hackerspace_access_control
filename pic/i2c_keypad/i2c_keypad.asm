@@ -10,17 +10,18 @@ DEV_ADDRESS EQU 0x37
 
 ;rc@ 1.21 mips
 
-temp EQU 7
-databyte EQU 8
-devaddress EQU 9
-regaddress EQU 10
-halfperiod EQU 11
-periods_cnt_low EQU 12
-periods_cnt_high EQU 13
-entropy0 EQU 14
-entropy1 EQU 15
-entropy2 EQU 16
-entropy3 EQU 17
+databyte EQU 7
+devaddress EQU 8
+regaddress EQU 9
+halfperiod EQU 10
+entropy0 EQU 11
+entropy1 EQU 12
+entropy2 EQU 13
+entropy3 EQU 14
+temp0 EQU 15
+temp1 EQU 16
+temp2 EQU 17
+temp3 EQU 18
 
 ;123
 ;456
@@ -77,24 +78,26 @@ reset_vect
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 start_bit
   ;watch for start bit
-  ; also watches keypad for entropy changes
+  ; process background tasks while waiting
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
  trisb IDLETRISB
 start_bit.wait_idle
+ call background
  movf PORTB, w
  andlw (1<<pin_clk) | (1<<pin_dat)
  bwneql (1<<pin_clk) | (1<<pin_dat), start_bit.wait_idle
 
 start_bit.wait_clklow
+ call background
  movfw PORTB
- movwf temp
- btfbc temp, pin_clk, start_bit.wait_idle
- btfbs temp, pin_dat, start_bit.wait_clklow
+ movwf temp0
+ btfbc temp0, pin_clk, start_bit.wait_idle
+ btfbs temp0, pin_dat, start_bit.wait_clklow
 
 start_bit.wait_bothlow
  movfw PORTB
- movwf temp
- btfbs temp, pin_clk, start_bit.wait_bothlow
+ movwf temp0
+ btfbs temp0, pin_clk, start_bit.wait_bothlow
 
  retlw 0
 
@@ -103,12 +106,14 @@ start_bit.wait_bothlow
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 read_byte
 ;reads a byte into databyte
-;leaves the clock pulled lowand doesn't send ack (streached) .
+;leaves the clock pulled lowand doesn't send ack (streched) .
+  ; process background tasks while waiting
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 c=0 
  WHILE c < 8
  clrc
 read_byte.clk_wait_#v(c)
+ call background
  btfbc PORTB, pin_clk, read_byte.clk_wait_#v(c)
  btfsc PORTB, pin_dat
  setc
@@ -117,6 +122,7 @@ c+=1
  ENDW
 
 clk_wait_ack
+ call background
  btfbs PORTB, pin_clk, clk_wait_ack
  trisb IDLETRISB & ~(1<<pin_clk)
 
@@ -124,52 +130,42 @@ clk_wait_ack
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ack
+  ; process background tasks while waiting
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
  trisb IDLETRISB & ~((1<<pin_dat)|(1<<pin_clk))
  nop
  trisb IDLETRISB & ~(1<<pin_dat)
  goto nack.clk_wait_ack1
- ;fall through to nack!
+ ;run through to nack!
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 nack
+  ; process background tasks while waiting
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
  trisb IDLETRISB
 nack.clk_wait_ack1
+ call background
  btfbc PORTB, pin_clk, nack.clk_wait_ack1
  nop
 nack.clk_wait_ack2
+ call background
  btfbs PORTB, pin_clk, nack.clk_wait_ack2
  trisb IDLETRISB
 
  retlw 0
 
 
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-wait MACRO time
+background
+; process background tasks
+  ;  watches keypad for status and entropy
+  ;  runs beeper
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
- LOCAL l2
-l2
- cbfflt TMR0, time, l2
- clrf TMR0
- ENDM
 
 
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-beep
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
- clrf TMR0
-beep.loop
- wait halfperiod
- bcf PORTB, pin_piezo
- wait halfperiod
- bsf PORTB, pin_piezo
- dbnz periods_cnt_low, beep.loop
- dbnz periods_cnt_high, beep.loop
 
- retlw 0
+
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -233,35 +229,29 @@ wait_start
  btfbs devaddress, 0, reading
 
 writing
- bflneq regaddress, 1, notwrite1
+ bflneq regaddress, 0, notwrite1
+ movlf 0, halfperiod
  call ack
  call read_byte
  movff databyte, halfperiod
  call ack
- call read_byte
- movff databyte, periods_cnt_high
- call ack
- call read_byte
- movff databyte, periods_cnt_low
- call beep
- call ack
  goto wait_start
 
 notwrite1
- bflneq regaddress, 2, notwrite2
+ bflneq regaddress, 1, i2caddrfail
  call ack
  call read_byte
  movbit databyte, 0, PORTB, pin_led_k
  movnbit databyte, 1, PORTB, pin_led_s
  call ack
+ goto wait_start
 
-notwrite2
+i2caddrfail
  call nack
  goto wait_start
 
 reading
- bflneq regaddress, 1, notread1
- call readkeypad
+ bflneq regaddress, 0, notread1
  mov keypad1, databyte
  call ack
  call writebyte
@@ -271,36 +261,49 @@ reading
  goto wait_start
 
 notread1
- bflneq regaddress, 1, notread2
+ bflneq regaddress, 1, i2caddrfail
 ; finish jenkins_one_at_a_time_hash
 ;  hash += (hash << 3);
  clrc
- rrf hash, w
- movwf temp
- clrc
- rrf temp, f
- clrc
- rrf temp, w
- addwf hash, f
+ rrf entropy0, w
+ movwf temp0
+ rrf entropy1, w
+ movwf temp1
+ rrf entropy2, w
+ movwf temp2
+ rrf entropy3, w
+ movwf temp3
 
-;  hash ^= (hash >> 11);
-    hash += (hash << 15);
- mov entropy, databyte
+ clrc
+ rrf temp0, f
+ rrf temp1, f
+ rrf temp2, f
+ rrf temp3, f
+
+ clrc
+ rrf temp0, f
+ rrf temp1, f
+ rrf temp2, f
+ rrf temp3, f
+
+ addff32 entropy, temp
+
+;todo  hash ^= (hash >> 11);
+;todo hash += (hash << 15);
+
+ mov entropy0, databyte
  call ack
  call writebyte
+ mov entropy1, databyte
+ call write2ready
+ call writebyte
+ mov entropy2, databyte
+ call write2ready
+ call writebyte
+ mov entropy3, databyte
+ call write2ready
+ call writebyte
  goto wait_start
-
-notread2
- call nack
- goto wait_start
-
-
-
-
- goto wait_start
-
-
-
 
 
  END
