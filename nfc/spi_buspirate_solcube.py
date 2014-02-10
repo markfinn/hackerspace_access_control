@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # encoding: utf-8
 
+from __future__ import division
 import sys
 #sys.path.insert(0, __file__+'/pyBusPirateLite')
 sys.path.insert(0, './pyBusPirateLite')
@@ -36,6 +37,10 @@ class cr95hf(object):
     assert spi.cfg_pins(PinCfg.POWER | PinCfg.AUX)
     time.sleep(.01)
 
+  @staticmethod
+  def getfsdi():
+    return 0x5
+    #the maximum 14443-4 frame length this reader can support. 5 means 64 bytes.  This is poorly spec'ed in the data sheert, but the examples use 5.
 
   def bulk_trans(self, *args):
 #    print 'send', args
@@ -78,12 +83,23 @@ class cr95hf(object):
   def protocolSelectOff(self):
     self.commandresp(2, [0,0])
 
-  def protocolSelect14443A(self, tRate=0, rRate=0, fwti=0, fwtm=1):
-    if fwti:
-      res = self.commandresp(2, [2,((tRate&3)<<6)|((rRate&3)<<4), fwti, fwtm])
+  def protocolsetup14443A(self, tRate=0, rRate=0, frameWaitTime_uS=100):# I dont know from the spec what frameWaitTime_uS should be before rats gives me the right answer. 86 seems to work, but I'll go long for now
+    x = (frameWaitTime_uS * 13.56) // 4096
+    for pp in xrange(0x0f):
+      mm = x//(2**pp)-1
+      if mm<=0xfe:
+        break
     else:
-      res = self.commandresp(2, [2,((tRate&3)<<6)|((rRate&3)<<4)])#, pp, mm])
+      assert 0
+    mm=max(1, int(mm))
+    res = self.commandresp(2, [2,((tRate&3)<<6)|((rRate&3)<<4), pp, mm])
     assert res == (0,[])
+
+
+  def protocolSelect14443A(self, tRate=0, rRate=0, frameWaitTime_uS=100):
+    self.protocolsetup14443A(tRate, rRate, frameWaitTime_uS)
+    return iso14443A(self)
+
 
   def comTag(self, data, bits=0, doCrc=1, topaz=0, splitFrame=0, noparity=0, drop2forcrc=1):
     if bits==0:
@@ -156,7 +172,7 @@ class iso14443A(object):
         bits += col+1
       else:
         bits += (len(data)-1)*8 + b
-
+      assert uuid[0]^uuid[1]^uuid[2]^uuid[3]^uuid[4]==0
     sak=self.comTag_select(uuid, cascade=cascade)
 
     return uuid, sak[0]
@@ -183,8 +199,8 @@ class iso14443A(object):
         break
       try:
         uuid, sak = self.selectOne()
-        #print 'uuid:', [hex(a) for a in uuid]
-        #print 'sak:', hex(sak)
+        print 'uuid:', [hex(a) for a in uuid]
+        print 'sak:', hex(sak)
         found.append((uuid, sak))
         self.comTag_halt()
       except:
@@ -193,18 +209,60 @@ class iso14443A(object):
 
 
 class iso14443_4(object):
+  #doesn't do cid or nad
   def __init__(self, tag):
     self.tag=tag
+    self.blockno=0
 
     #do rats
-    r, x = self.tag.transcieve([0xe0, 0x50|cid])
+    cid=0
+    fsdi = tag.reader.getfsdi()
+    r, x = self.tag.transcieve([0xe0, (fsdi<<4)|cid])
     assert x[0]&0xB0 == 0      #collision or error
     assert r[0] == len(r)
-    self.rats = r[1:]
+    r = r[1:]
+    self.rats = r
+    r = r[1:]
 
-    self.blockno=0
-#  set fwt here.
-  
+
+    if self.rats[0]&0x10:
+      self.rats_TA=r[0]
+      r=r[1:]
+    else:
+      self.rats_TA=0
+
+    if self.rats[0]&0x20:
+      self.rats_TB=r[0]
+      r=r[1:]
+    else:
+      self.rats_TB=0x40
+
+    if self.rats[0]&0x40:
+      self.rats_TC=r[0]
+      r=r[1:]
+    else:
+      self.rats_TC=0x02
+
+    self.rats_historicalbytes=r
+
+    self.fsci = r[0]&0xf
+    if self.fsci > 8:
+      self.fsc = 256
+    else:
+      self.fsc = [16, 24, 32, 40, 48, 64, 96, 128, 256][self.fsci]
+
+    self.fwi = self.rats_TB>>4
+    self.fwt = 256*16/13.56*(2**self.fwi)
+#  set fwt.
+    self.tag.reader.protocolsetup14443A(frameWaitTime_uS=self.fwt)
+
+    self.sfgi=self.rats_TB&0xf
+    self.sfgt = 256*16/13.56*(2**self.sfgi)
+#wait sfgt
+    time.sleep(self.sfgt/1000000)
+
+
+    
 
 
   def transcieve(self, bytes):
@@ -213,6 +271,45 @@ class iso14443_4(object):
     self.blockno=(1+self.blockno)%2
     assert x[0]&0xB0 == 0      #collision or error
 
+
+
+    send
+
+    while True:
+    #recv
+    check block n stuff?
+    if recvok:
+      if s fwt:
+        send s fwt 
+        change wait. unchange when?
+      elif s dsel:
+        done
+      elif rack
+        if it matches current block num
+          inc blockno
+          send next
+        else:
+          send last again
+      else:
+        add to buf
+        inc blockno
+        if chain:
+          ack
+        else:
+          return
+    else:#recv err
+      if input chaning:
+        send rnack
+        until when?
+      elif just sent a dselect:
+        send dselect
+        until when?
+      else
+        send rnack
+
+need to keep track of picc block num, and test it for proto error
+need to apply the "error revovery" rules
+        
 
   
   def printats(self):
@@ -248,10 +345,18 @@ if __name__ == '__main__':
   chip = cr95hf(spi)
 #  print c.commandresp(1, [])
 
-  chip.protocolSelect14443A(fwti=7)
-  tech = iso14443A(chip)
+  tech = chip.protocolSelect14443A()
   
-  tech.comTag_reqa()
+#  tech.findAll()
+#  sys.exit()
+
+  while True:
+    try:
+      tech.comTag_reqa()
+      break
+    except:
+      pass
+
   uuid, sak = tech.selectOne()
   print 'uuid:', [hex(a) for a in uuid]
   print 'sak:', hex(sak)
@@ -268,19 +373,12 @@ if __name__ == '__main__':
 #  print c.comTag14443A([0x3, 0xaf])
 #  print c.comTag14443A([0x2, 0xaf])
 
+#    self.comTag_halt()
 
   spi.resetBP()
 
 
 
-    #commented out because datasheet has bad formula.
-    #x = (frameWaitTime_uS * 13.56) // 4096
-    #for pp in xrange(0x0f):
-    #  mm = x//(2**pp)-1
-    #  if mm<=1 and mm<=0xfe:
-    #    break
-    #else:
-    #  assert 0
 
 #todo #  set fwt
 
