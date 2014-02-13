@@ -273,42 +273,42 @@ class iso14443_4(object):
 
 
 
-    send
+#    send
+#
+#    while True:
+#    #recv
+#    check block n stuff?
+#    if recvok:
+#      if s fwt:
+#        send s fwt 
+#        change wait. unchange when?
+#      elif s dsel:
+#        done
+#      elif rack
+#        if it matches current block num
+#          inc blockno
+#          send next
+#        else:
+#          send last again
+#      else:
+#        add to buf
+#        inc blockno
+#        if chain:
+#          ack
+#        else:
+#          return
+#    else:#recv err
+#      if input chaning:
+#        send rnack
+#        until when?
+#      elif just sent a dselect:
+#        send dselect
+#        until when?
+#      else
+#        send rnack
 
-    while True:
-    #recv
-    check block n stuff?
-    if recvok:
-      if s fwt:
-        send s fwt 
-        change wait. unchange when?
-      elif s dsel:
-        done
-      elif rack
-        if it matches current block num
-          inc blockno
-          send next
-        else:
-          send last again
-      else:
-        add to buf
-        inc blockno
-        if chain:
-          ack
-        else:
-          return
-    else:#recv err
-      if input chaning:
-        send rnack
-        until when?
-      elif just sent a dselect:
-        send dselect
-        until when?
-      else
-        send rnack
-
-need to keep track of picc block num, and test it for proto error
-need to apply the "error revovery" rules
+#TODO need to keep track of picc block num, and test it for proto error
+#TODO need to apply the "error revovery" rules
         
 
   
