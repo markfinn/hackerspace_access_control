@@ -1,4 +1,4 @@
-//write command
+//don't like 'X' command, but out of space
 //vectors:  aes, cbcmac, directtoloader(loaderactivate=1 and run somehow.)  mrbus stuff?
 
 /*************************************************************************
@@ -42,6 +42,8 @@ LICENSE:
 
 #include <avr/signature.h>
 
+#define BOOTLOADERVER 1
+
 #define LOADERPKTS ((SPM_PAGESIZE+11)/12)
 #define LOADERSTATBYTES ((LOADERPKTS+7)/8)
 #if LOADERPKTS > 256
@@ -49,7 +51,7 @@ LICENSE:
 #endif
 uint8_t loaderstatus[LOADERSTATBYTES];
 uint8_t loaderactivate=0;
-uint16_t loaderpage=0;
+int16_t loaderpage=-1;
 uint8_t mrbus_dev_addr = 0;
 
 uint8_t pkt_count = 0;
@@ -172,20 +174,26 @@ void PktHandler(void)
 	// should be sent out of the main loop so that they don't step on things in
 	// the transmit buffer
 	
-	if ('!' == rxBuffer[MRBUS_PKT_TYPE])
+	if ('A' == rxBuffer[MRBUS_PKT_TYPE])
 	{
 		// PING packet
+		txBuffer[MRBUS_PKT_TYPE] = 'a';
+		goto shortreturnsend;
+	}
+	if ('!' == rxBuffer[MRBUS_PKT_TYPE])
+	{
+		// BOOT LOADER STATUS packet
 		loaderactivate=1;
 statussend:
-		txBuffer[MRBUS_PKT_LEN] = 6+2+2;
+		txBuffer[MRBUS_PKT_LEN] = 6+3;
 		txBuffer[MRBUS_PKT_TYPE] = '@';
-		txBuffer[6]  = SPM_PAGESIZE>>8;
-		txBuffer[7]  = SPM_PAGESIZE;
-	  for(i=0; i<LOADERSTATBYTES-1; i++)
+		for(i=0; i<LOADERSTATBYTES-1; i++)
 	  	if(loaderstatus[i]!=0xff)
 	  		break;
-		txBuffer[8] = i;
-		txBuffer[9] = loaderstatus[i];
+		txBuffer[6] = i;
+		txBuffer[7] = loaderstatus[i];
+		txBuffer[8] = loaderpage>0;
+
 returnsend:
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
@@ -198,7 +206,7 @@ returnsend:
 		if (rxBuffer[MRBUS_PKT_LEN]!= 20)
 			return;	
 		uint8_t x = rxBuffer[18];
- 		if(x >= LOADERPKTS || (loaderstatus[x/8]&(1<<(x&7))))
+ 		if(loaderpage<0 || x >= LOADERPKTS || (loaderstatus[x/8]&(1<<(x&7))))
 			return;	
  		uint16_t addr = loaderpage + x*12;
 		uint16_t *p = (uint16_t *)(rxBuffer+6);
@@ -216,9 +224,15 @@ returnsend:
 		if (rxBuffer[MRBUS_PKT_LEN]!= 8)
 			return;	
 		//blank statuses
-	  for(i=0; i<LOADERSTATBYTES; i++)
+		for(i=0; i<LOADERSTATBYTES; i++)
 	  	loaderstatus[i]=0;
 		loaderpage = *(uint16_t *)(rxBuffer+6);
+		int x=loaderpage*SPM_PAGESIZE;
+		if (loaderpage<0 || x+SPM_PAGESIZE > BOOTSTART)
+		{
+			loaderpage = -1;
+			return;
+		}
 		cli();
 		boot_rww_enable ();//clears page buffer, strangely.
 		boot_page_erase (loaderpage);
@@ -237,6 +251,7 @@ shortreturnsend:
 			return;	
 		cli();
 		boot_page_write (loaderpage);     // Store buffer in flash page.
+		loaderpage=-1;
 		sei();
 		boot_spm_busy_wait (); 
 		cli();
@@ -245,32 +260,51 @@ shortreturnsend:
 		txBuffer[MRBUS_PKT_TYPE] = 'w';
 		goto shortreturnsend;
 	}
+	else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// Signature
+		txBuffer[MRBUS_PKT_LEN] = 20;
+		txBuffer[MRBUS_PKT_TYPE] = 's';
+		txBuffer[6]  = '!';
+		txBuffer[7]  = sigcheck();
+		uint8_t* p=getsigptr();
+		for(i=8; i<20; i++, p++)
+			txBuffer[i]  = *p;
+		goto returnsend;
+	}
 	else if ('V' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// Version
-		txBuffer[MRBUS_PKT_LEN] = 20;
+		txBuffer[MRBUS_PKT_LEN] = 19;
 		txBuffer[MRBUS_PKT_TYPE] = 'v';
 		txBuffer[6]  = '!';
-		txBuffer[7]  = 1;
-		txBuffer[8] = sigcheck();
-		txBuffer[9]  = SIGNATURE_0;
-		txBuffer[10]  = SIGNATURE_1;
-		txBuffer[11]  = SIGNATURE_2;
-		uint8_t* p=getsigptr();
-	  for(i=12; i<12+8; i++, p++)
-			txBuffer[i]  = *p;
+		txBuffer[7]  = BOOTLOADERVER;
+		txBuffer[8]  = SIGNATURE_0;
+		txBuffer[9]  = SIGNATURE_1;
+		txBuffer[10]  = SIGNATURE_2;
+		txBuffer[11]  = SPM_PAGESIZE>>8;
+		txBuffer[12]  = SPM_PAGESIZE;
+		txBuffer[13]  = FLASHEND>>16;
+		txBuffer[14]  = FLASHEND>>8;
+		txBuffer[15]  = FLASHEND;
+		txBuffer[16]  = BOOTSTART>>16;
+		txBuffer[17]  = BOOTSTART>>8;
+		txBuffer[18]  = BOOTSTART;
+
 		goto returnsend;
 	}
 	else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
-		// Reset
+		cli();
+		asm("jmp 0000");
+/*		// Reset
 		cli();
 		wdt_reset();
 		MCUSR &= ~(_BV(WDRF));
 		WDTCSR |= _BV(WDE) | _BV(WDCE);
 		WDTCSR = _BV(WDE);
 		while(1);  // Force a watchdog reset
-	}
+*/	}
 
 }
 
@@ -316,6 +350,14 @@ int main(void)
 	mrbusPktQueueInitialize(&mrbusRxQueue, mrbusRxPktBufferArray, MRBUS_RX_BUFFER_DEPTH);
 	mrbusInit();
 	sei();	
+
+	//send an "I'm here!" broadcast to help in catching the bootloader
+	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
+	txBuffer[MRBUS_PKT_LEN] = 6;
+	txBuffer[MRBUS_PKT_TYPE] = '@';
+	txBuffer[MRBUS_PKT_DEST] = 0xff;
+	txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 
 
 	uint8_t bus_countdown = 100;

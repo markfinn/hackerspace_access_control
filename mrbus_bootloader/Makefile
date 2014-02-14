@@ -31,15 +31,11 @@ LOCK=0x0F
 #BLB02, 01 -> 1,1  #bootloader can read and write application flash
 #LB2,1 -> 1,1 unlocked. Maybe lock these later once I know what I'm doing, but do it as a second command after fuses and BLBs are set
 
-PCMSB = 13
-PAGEMSB = 5
-ZPCMSB = "($(PCMSB)+1)"
-ZPAGEMSB = "($(PAGEMSB)+1)"
 BOOTSTART = 0x7000#0x3800#in words
 
 
 # MRBus
-DEFINES = -DMRBUS -DF_CPU=$(F_CPU) -DPCMSB=$(PCMSB) -DPAGEMSB=$(PAGEMSB) -DZPCMSB=$(ZPCMSB) -DZPAGEMSB=$(ZPAGEMSB)
+DEFINES = -DMRBUS -DF_CPU=$(F_CPU) -DBOOTSTART=$(BOOTSTART)
 SRCS = $(BASE_NAME).c $(MRBUSLIB)/mrbus-avr.c $(MRBUSLIB)/mrbus-crc.c $(MRBUSLIB)/mrbus-queue.c
 ASRCS = aes_enc-asm.S  aes_keyschedule-asm.S  aes_sbox-asm.S
 INCS = $(MRBUSLIB)/mrbus.h $(MRBUSLIB)/mrbus-avr.h aes128_enc.h  aes_keyschedule.h  aes_types.h
