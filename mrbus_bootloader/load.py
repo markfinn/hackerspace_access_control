@@ -35,23 +35,31 @@ def bootload(node, prog):
     return reply.pop()
 
   #make sure the node replies, but only once.
-  if None == pollnode(node, 'A'): sys.exit(1)
   loaderstatus = pollnode(node, '!')
   if None == loaderstatus: sys.exit(1)
   loaderversion = pollnode(node, 'V')
   if None == loaderversion: sys.exit(1)
+  loadersig = pollnode(node, 'S')
+  if None == loadersig: sys.exit(1)
 
   #OK, we seem to be safe
   print ih.minaddr()
   print ih.maxaddr()
   print loaderstatus
   print loaderversion
-
-
-  
+  print loadersig
 
 #  node.sendpkt(['V'])
 #  p=node.getpkt(timeout=2)
+
+#Epp
+#e
+#D[12]xs
+#@ if s
+#W
+#w
+
+
 
 
 def readhex(fname):
