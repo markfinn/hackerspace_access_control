@@ -24,7 +24,7 @@ def bootload(node, prog):
         replycount+=1
 
     if replycount == 0:
-      print >> sys.stderr, 'failed to find node %02xh with command %02xh'%(node.addr, pkttype)
+      print >> sys.stderr, 'failed to find node %02xh with command %02xh'%(node.addr, ord(pkttype))
       return None
     if replycount > count:
       print >> sys.stderr, 'too many replies to find node %02xh with command %02xh. This might be due to bus dups, or there might be two nodes with the same address.  I\'m not risking it. Dying.'%(node.addr, ord(pkttype))
@@ -33,6 +33,7 @@ def bootload(node, prog):
       print >> sys.stderr, 'too many unique replies to find node %02xh with command %02xh. This almost certainly means there are two nodes with the same address.  Dying.'%(node.addr, ord(pkttype))
       return None
     return reply.pop()
+
 
   #make sure the node replies, but only once.
   loaderstatus = pollnode(node, '!')
@@ -49,17 +50,38 @@ def bootload(node, prog):
   print loaderversion
   print loadersig
 
-#  node.sendpkt(['V'])
-#  p=node.getpkt(timeout=2)
-
-#Epp
-#e
-#D[12]xs
-#@ if s
-#W
-#w
+  pagesize=(loaderversion.data[5]<<8)+loaderversion.data[6]
 
 
+  def writepage(page):
+  #Epp
+  #e
+    print 'sende', page
+    node.sendpkt(['E', page>>8, page])
+    print node.getpkt(timeout=5)
+
+  #D[12]xs
+  #@ if s
+    tosend=set(xrange((pagesize+11)//12))
+    while tosend:
+      i=tosend.pop()
+      stat=1 if len(tosend)==0 else 0
+      node.sendpkt(['D']+[ih[page*pagesize+i*12+j] for j in xrange(12)]+[i, stat])
+      if stat:
+        p = node.getpkt(timeout=2)
+        if p:
+          print p
+          tosend|=set((p.data[0]*8+k for k in xrange(8) if p.data[0]*8+k < (pagesize+11)//12 and p.data[1]&(1<<k)==0))
+        else:
+          tosend|=set([i])
+  #W
+  #w
+    print 'sendw'
+    node.sendpkt(['W'])
+    print node.getpkt(timeout=2)
+
+  for page in xrange(ih.minaddr()//pagesize, (ih.maxaddr()+pagesize)//pagesize):
+    writepage(page)
 
 
 def readhex(fname):

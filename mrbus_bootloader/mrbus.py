@@ -1,3 +1,5 @@
+
+#flowcontrol motherfucker, do you speak it?  remove the shitty timedelay in sendpkt
 import serial
 import time
 from collections import deque
@@ -51,7 +53,7 @@ class node(object):
 
   def getpkt(self, timeout=None):
     if len(self.pkts) == 0:
-      self.mrb.pump(timeout=timeout, single=True)
+      self.mrb.pump(timeout=timeout)
     if len(self.pkts) == 0:
       return None
     return self.pkts.popleft()
@@ -118,7 +120,7 @@ class mrbusSimple(object):
     s+=";\r\n"
     self.log(0, '>>>'+s)
     self.serial.write(s)
-        
+    time.sleep(.05)        
 
 
 class mrbus(object):
@@ -178,17 +180,14 @@ class mrbus(object):
     self.handlers = [h for h in self.handlers if h[0]!=hint]
 
 
-  def pump(self, timeout=None, single=False):
+  def pump(self, timeout=None):
     done=False
     to = self.mrbs.serial.timeout
     self.mrbs.serial.timeout=max(0,timeout)
     while not done:
       p = self.getpkt()
       if p:
-        if single:
-          done=True
-        else:
-          self.mrbs.serial.timeout=0
+        self.mrbs.serial.timeout=0
         for hint,h in self.handlers:
           r = h(p)
           if r:
