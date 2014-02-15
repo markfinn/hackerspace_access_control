@@ -51,10 +51,9 @@ LICENSE:
 uint8_t loaderstatus[LOADERSTATBYTES];
 uint8_t loaderactivate=0;
 uint8_t bus_countdown = 100;
-uint16_t loaderpage=0xffff;
-uint8_t mrbus_dev_addr = 0;
+uint8_t mrbus_dev_addr;
 
-uint8_t pkt_count = 0;
+uint8_t progbuf[SPM_PAGESIZE];
 
 void debug(uint8_t len, uint8_t *bytes)
 {
@@ -69,6 +68,44 @@ void debug(uint8_t len, uint8_t *bytes)
 	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 }
 
+uint8_t __attribute__ ((noinline)) getbootloaderver()
+{//a function so that the application can ask too.
+	return BOOTLOADERVER;
+}
+
+void __attribute__ ((noinline)) boot_program_page (uint32_t page, uint8_t *buf)
+{//from http://www.nongnu.org/avr-libc/user-manual/group__avr__boot.html#ga7249d12e06789cd306583abf7def8176
+	uint16_t i;
+	uint8_t sreg;
+
+	// Disable interrupts.
+	sreg = SREG;
+
+	cli();
+	eeprom_busy_wait ();
+	boot_page_erase (page);
+	boot_spm_busy_wait ();      // Wait until the memory is erased.
+
+	for (i=0; i<SPM_PAGESIZE; i+=2)
+	{
+		// Set up little-endian word.
+		uint16_t w = *buf++;
+		w += (*buf++) << 8;
+		boot_page_fill (page + i, w);
+	}
+
+	boot_page_write (page);     // Store buffer in flash page.
+	boot_spm_busy_wait();       // Wait until the memory is written.
+
+	// Reenable RWW-section again. We need this if we want to jump back
+	// to the application after bootloading.
+	boot_rww_enable ();
+
+	// Re-enable interrupts (if they were ever enabled).
+
+	SREG = sreg;
+}
+
 uint32_t getsz()
 {
 	return ((uint16_t*)(((uint8_t*)0)+BOOTSTART))[-1];
@@ -79,7 +116,7 @@ uint8_t* getsigptr()
 	return (((uint8_t*)0)+BOOTSTART)-2-16;
 }
 
-void lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
+void __attribute__ ((noinline)) lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
 {
 	aes128_ctx_t ctx; /* the context where the round keys are stored */
 	aes128_init(key, &ctx); /* generating the round keys from the 128 bit key */
@@ -143,7 +180,6 @@ int main(void)
 	wdt_disable();
 #endif	
 
-	pkt_count = 0;
 
 	// Initialize MRBus address from EEPROM
 	mrbus_dev_addr = eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR);
@@ -217,7 +253,7 @@ int main(void)
 			{
 				// PING packet
 				txBuffer[MRBUS_PKT_TYPE] = 'a';
-//		shortreturnsend:
+		shortreturnsend:
 				txBuffer[MRBUS_PKT_LEN] = 6;
 				goto returnsend;
 			}
@@ -226,14 +262,13 @@ int main(void)
 				// BOOT LOADER STATUS packet
 				loaderactivate=1;
 		statussend:
-				txBuffer[MRBUS_PKT_LEN] = 10;
+				txBuffer[MRBUS_PKT_LEN] = 8;
 				txBuffer[MRBUS_PKT_TYPE] = '@';
 				for(i=0; i<LOADERSTATBYTES-1; i++)
 					if(loaderstatus[i]!=0xff)
 						break;
 				txBuffer[6] = i;
 				txBuffer[7] = loaderstatus[i];
-				*(uint16_t*)(txBuffer+8)  = loaderpage;
 
 		returnsend:
 				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
@@ -247,59 +282,55 @@ int main(void)
 				if (rxBuffer[MRBUS_PKT_LEN]!= 20)
 					break;	
 				uint8_t x = rxBuffer[18];
-		 		if(loaderpage==0xffff || x >= LOADERPKTS || (loaderstatus[x/8]&(1<<(x&7))))
+		 		if(x >= LOADERPKTS)
 					break;	
-		 		uint16_t addr = loaderpage + x*12;
-				uint16_t *p = (uint16_t *)(rxBuffer+6);
-				cli();
-				for (i=0; i<6 && addr < SPM_PAGESIZE; i++, addr+=2)
-					boot_page_fill (addr, *(p++));
-				sei();
+				memcpy(progbuf+x*12, rxBuffer+6, min(12, SPM_PAGESIZE - x*12));
 				loaderstatus[x/8]|=(1<<(x&7));
 				if(rxBuffer[19])
 					goto statussend;
 			}
-			else if ('E' == rxBuffer[MRBUS_PKT_TYPE]) 
+			else if ('F' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
-				// ERASE PAGE
-				if (rxBuffer[MRBUS_PKT_LEN]!= 8)
-					break;	
-				//blank statuses
+				// FILL PAGE BUF
+
+					uint8_t start, len, dest;
+					
+				// ERASE buf markers
 				for(i=0; i<LOADERSTATBYTES; i++)
 			  	loaderstatus[i]=0;
-				loaderpage = *(uint16_t *)(rxBuffer+6);
-//				uint8_t * dd = (uint8_t[]){loaderpage, loaderpage>>8, (loaderpage+SPM_PAGESIZE), (loaderpage+SPM_PAGESIZE)>>8, BOOTSTART, BOOTSTART>>8, (loaderpage+SPM_PAGESIZE > BOOTSTART)};
-//				debug(7, dd);
-				if (loaderpage+SPM_PAGESIZE > BOOTSTART)
+				txBuffer[MRBUS_PKT_TYPE] = 'f';
+				if (rxBuffer[MRBUS_PKT_LEN]== 7)
 				{
-					loaderpage = 0xffff;
-					goto statussend;
+					memset(progbuf, rxBuffer[6], SPM_PAGESIZE);
+					goto shortreturnsend;
 				}
-				cli();
-				boot_page_erase (loaderpage);
-				sei();
-				boot_spm_busy_wait (); 
-				cli();
-				boot_rww_enable ();//clears page buffer, strangely.
-				sei();
-		
-				goto statussend;
+				else if (rxBuffer[MRBUS_PKT_LEN]== 8)
+				{
+					start= *(uint16_t *)(rxBuffer+6);
+					len=SPM_PAGESIZE;
+					dest=0;
+				}
+				else if (rxBuffer[MRBUS_PKT_LEN]== 12)
+				{
+					start= *(uint16_t *)(rxBuffer+6);
+					len=*(uint16_t *)(rxBuffer+8);
+					dest=*(uint16_t *)(rxBuffer+10);
+				}
+				else
+					break;	
+				//todo shorten len if needed, then copy
+
+				goto shortreturnsend;
 			}
 			else if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
 				// WRITE PAGE
-				if (rxBuffer[MRBUS_PKT_LEN]!= 6 || loaderpage==0xffff)
+				if (rxBuffer[MRBUS_PKT_LEN]!= 8)
 					break;	
-				cli();
-				boot_page_write (loaderpage);     // Store buffer in flash page.
-				loaderpage=0xffff;
-				sei();
-				boot_spm_busy_wait (); 
-				cli();
-				boot_rww_enable ();
-				sei();
-
-				goto statussend;
+				uint16_t page = *(uint16_t *)(rxBuffer+6);
+				boot_program_page (page, progbuf);
+				txBuffer[MRBUS_PKT_TYPE] = 'w';
+				goto shortreturnsend;
 			}
 			else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
@@ -319,7 +350,7 @@ int main(void)
 				txBuffer[MRBUS_PKT_LEN] = 15;
 				txBuffer[MRBUS_PKT_TYPE] = 'v';
 				txBuffer[6]  = '!';
-				txBuffer[7]  = BOOTLOADERVER;
+				txBuffer[7]  = getbootloaderver();
 				*(uint16_t*)(txBuffer+8)  = SPM_PAGESIZE;
 				*(uint16_t*)(txBuffer+10)  = BOOTSTART;
 				txBuffer[12]  = SIGNATURE_0;
@@ -354,5 +385,7 @@ int main(void)
 	}
 
 }
+
+
 
 

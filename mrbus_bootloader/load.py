@@ -54,6 +54,22 @@ def bootload(node, prog):
 
 
   def writepage(pageaddr, data):
+    def dountillreply(cmd, rep=None, to=5):
+      if rep==None:
+        rep=ord(cmd[0].lower())
+      while True:
+        node.sendpkt(cmd)
+        p = node.getpkt(timeout=1)
+        if p and p.cmd==rep:
+          print p
+          return
+        elif p==None:
+          print 'fail',
+          to-=1
+          if to == 0:
+            print 'giving up'
+            sys.exit(1)
+
     def requirestatus():
       while True:
         p = node.getpkt(timeout=1)
@@ -66,12 +82,12 @@ def bootload(node, prog):
 
   #Epp
   #e
-    print 'sende', pageaddr
-    node.sendpkt(['E', pageaddr, pageaddr>>8])
-    requirestatus()
+    print 'sendf'
+    dountillreply(['F', 0])
 
   #D[12]xs
   #@ if s
+    print 'sendd'
     tosend=set(xrange((pagesize+11)//12))
     while tosend:
       i=tosend.pop()
@@ -89,8 +105,7 @@ def bootload(node, prog):
   #W
   #w
     print 'sendw'
-    node.sendpkt(['W'])
-    requirestatus()
+    dountillreply(['W', pageaddr, pageaddr>>8])
 
   for page in xrange(ih.minaddr()//pagesize, (ih.maxaddr()+pagesize)//pagesize):
     writepage(page*pagesize, [ih[ii] for ii in xrange(page*pagesize, (page+1)*pagesize)])
