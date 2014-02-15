@@ -37,7 +37,7 @@ BOOTSTART = 0x7000#0x3800#in words
 # MRBus
 DEFINES = -DMRBUS -DF_CPU=$(F_CPU) -DBOOTSTART=$(BOOTSTART)
 SRCS = $(BASE_NAME).c $(MRBUSLIB)/mrbus-avr.c $(MRBUSLIB)/mrbus-crc.c $(MRBUSLIB)/mrbus-queue.c
-ASRCS = aes_enc-asm.S  aes_keyschedule-asm.S  aes_sbox-asm.S
+ASRCS = aes_enc-asm.S  aes_keyschedule-asm.S  aes_sbox-asm.S blvects.S
 INCS = $(MRBUSLIB)/mrbus.h $(MRBUSLIB)/mrbus-avr.h aes128_enc.h  aes_keyschedule.h  aes_types.h
 
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) 
