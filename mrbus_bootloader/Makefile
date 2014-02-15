@@ -45,7 +45,7 @@ AVRDUDE = avrdude -c usbtiny -p $(DEVICE)
 OBJS = ${SRCS:.c=.o} ${ASRCS:.S=.o}
 INCLUDES = -I. -I$(MRBUSLIB)
 CFLAGS  = $(INCLUDES) -Wall -Os -std=gnu99 -ffunction-sections -fdata-sections
-LDFLAGS += -Wl,-gc-sections,--section-start=.text=$(BOOTSTART),-Map,$(BASE_NAME).map,--gc-sections,--relax
+LDFLAGS += -Wl,-gc-sections,--section-start=.text=$(BOOTSTART),-Map,$(BASE_NAME).map,--gc-sections,--relax,-Tbootloader.x
 
 COMPILE = avr-gcc $(DEFINES) $(CFLAGS) -mmcu=$(DEVICE)
 
@@ -100,7 +100,7 @@ clean:
 
 # file targets:
 
-$(BASE_NAME).elf: $(OBJS)
+$(BASE_NAME).elf: $(OBJS) bootloader.x
 	$(COMPILE) -o $(BASE_NAME).elf $(OBJS) $(LDFLAGS)
 
 
