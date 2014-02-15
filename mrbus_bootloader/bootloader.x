@@ -157,10 +157,13 @@ SECTIONS
     . = ALIGN(2);
      _edata = . ;
      PROVIDE (__data_end = .) ;
+  }  > data
+  .sbox	 0x7f00 : AT (0x7f00) 
+  {
     . = ALIGN(256);
    *(.sbox)
     KEEP(*(.sbox))
-  }  > data
+	} > text
   .bss   : AT (ADDR (.bss))
   {
      PROVIDE (__bss_start = .) ;
