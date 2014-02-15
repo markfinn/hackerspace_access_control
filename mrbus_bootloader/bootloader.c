@@ -76,7 +76,7 @@ uint32_t getsz()
 
 uint8_t* getsigptr()
 {
-	return (((uint8_t*)0)+BOOTSTART)[-2-16];
+	return (((uint8_t*)0)+BOOTSTART)-2-16;
 }
 
 void lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
@@ -106,7 +106,7 @@ uint8_t sigcheck()
 	uint32_t sz = getsz();
 	uint8_t* sig = getsigptr();
 
-	for (uint8_t* p =((uint8_t*)0)+sz; p++; p<sig)
+	for (uint8_t* p =((uint8_t*)0)+sz;p<sig;p++)
 		if (*p!=0xff)
 			return 1;
 
@@ -217,7 +217,7 @@ int main(void)
 			{
 				// PING packet
 				txBuffer[MRBUS_PKT_TYPE] = 'a';
-		shortreturnsend:
+//		shortreturnsend:
 				txBuffer[MRBUS_PKT_LEN] = 6;
 				goto returnsend;
 			}
