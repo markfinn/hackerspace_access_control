@@ -157,6 +157,9 @@ SECTIONS
     . = ALIGN(2);
      _edata = . ;
      PROVIDE (__data_end = .) ;
+    . = ALIGN(256);
+   *(.sbox)
+    KEEP(*(.sbox))
   }  > data
   .bss   : AT (ADDR (.bss))
   {
