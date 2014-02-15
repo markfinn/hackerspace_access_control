@@ -24,7 +24,7 @@
  * \license  GPLv3 or later
  * 
  */
-.section .sbox
+.section .sbox,"a"
 .balign 256
 .global aes_sbox
 aes_sbox:
