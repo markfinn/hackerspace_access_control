@@ -36,9 +36,9 @@ def bootload(node, prog):
 
 
   #make sure the node replies, but only once.
-  loaderstatus = pollnode(node, '!')
+  loaderstatus = pollnode(node, '!', wait=0)
   if None == loaderstatus: sys.exit(1)
-  loaderversion = pollnode(node, 'V')
+  loaderversion = pollnode(node, 'V', wait=0)
   if None == loaderversion: sys.exit(1)
   loadersig = pollnode(node, 'S')
   if None == loadersig: sys.exit(1)
@@ -50,15 +50,25 @@ def bootload(node, prog):
   print loaderversion
   print loadersig
 
-  pagesize=(loaderversion.data[5]<<8)+loaderversion.data[6]
+  pagesize=loaderversion.data[2]|(loaderversion.data[3]<<8)
 
 
-  def writepage(page):
+  def writepage(pageaddr, data):
+    def requirestatus():
+      while True:
+        p = node.getpkt(timeout=1)
+        if p and p.cmd==ord('@'):
+          print p
+          return p.data[2]|(p.data[3]<<8)
+        elif p==None:
+          print 'fail',
+          node.sendpkt(['!'])
+
   #Epp
   #e
-    print 'sende', page
-    node.sendpkt(['E', page>>8, page])
-    print node.getpkt(timeout=5)
+    print 'sende', pageaddr
+    node.sendpkt(['E', pageaddr, pageaddr>>8])
+    requirestatus()
 
   #D[12]xs
   #@ if s
@@ -66,7 +76,9 @@ def bootload(node, prog):
     while tosend:
       i=tosend.pop()
       stat=1 if len(tosend)==0 else 0
-      node.sendpkt(['D']+[ih[page*pagesize+i*12+j] for j in xrange(12)]+[i, stat])
+      d=[data[i*12+j] for j in xrange(12) if i*12+j < pagesize]
+      d+=[0]*(12-len(d))
+      node.sendpkt(['D']+d+[i, stat])
       if stat:
         p = node.getpkt(timeout=2)
         if p:
@@ -78,10 +90,10 @@ def bootload(node, prog):
   #w
     print 'sendw'
     node.sendpkt(['W'])
-    print node.getpkt(timeout=2)
+    requirestatus()
 
   for page in xrange(ih.minaddr()//pagesize, (ih.maxaddr()+pagesize)//pagesize):
-    writepage(page)
+    writepage(page*pagesize, [ih[ii] for ii in xrange(page*pagesize, (page+1)*pagesize)])
 
 
 def readhex(fname):
@@ -89,6 +101,14 @@ def readhex(fname):
 
 if __name__ == '__main__':
   mrb = mrbus.mrbus('/dev/ttyUSB0')#, logall=True, logfile=sys.stderr)
+
+  def debughandler(p):
+    if p.cmd==ord('*'):
+      print 'debug:', p
+      return True #eat packet
+    return False #dont eat packet
+  mrb.install(debughandler, 0)
+
   nodes = mrb.scannodes(pkttype='!')
   if len(nodes) == 0:
     print 'no node found in bootloader node. improve this program to catch it on start up.'

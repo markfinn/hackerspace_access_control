@@ -1,5 +1,3 @@
-
-#flowcontrol motherfucker, do you speak it?  remove the shitty timedelay in sendpkt
 import serial
 import time
 from collections import deque
@@ -32,7 +30,7 @@ class packet(object):
 class node(object):
   def __init__(self, mrb, addr):
     def handler(p):
-      if p.src==self.addr and p.dest==mrb.addr:
+      if p.src==self.addr and (p.dest==mrb.addr or p.dest==0xff):
         self.pkts.append(p)
       return True #eat packet
 
@@ -116,8 +114,8 @@ class mrbusSimple(object):
     for d in data:
       if type(d) == str:
         d=ord(d)
-      s+=" %02X"%d
-    s+=";\r\n"
+      s+=" %02X"%(d&0xff)
+    s+=";\r"
     self.log(0, '>>>'+s)
     self.serial.write(s)
     time.sleep(.05)        

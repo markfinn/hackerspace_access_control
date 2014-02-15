@@ -1,4 +1,3 @@
-//don't like 'X' command, but out of space
 //vectors:  aes, cbcmac, directtoloader(loaderactivate=1 and run somehow.)  mrbus stuff?
 
 /*************************************************************************
@@ -51,40 +50,33 @@ LICENSE:
 #endif
 uint8_t loaderstatus[LOADERSTATBYTES];
 uint8_t loaderactivate=0;
-int16_t loaderpage=-1;
+uint8_t bus_countdown = 100;
+uint16_t loaderpage=0xffff;
 uint8_t mrbus_dev_addr = 0;
 
 uint8_t pkt_count = 0;
 
-
+void debug(uint8_t len, uint8_t *bytes)
+{
+	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
+	txBuffer[MRBUS_PKT_DEST] = 0xff;
+	txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+	txBuffer[MRBUS_PKT_TYPE] = '*';
+	if (len > 14)
+		len=14;
+	txBuffer[MRBUS_PKT_LEN] = 6+len;
+	memcpy(txBuffer+6, bytes, len);
+	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+}
 
 uint32_t getsz()
 {
-  //find the signature, as the 20 bytes just prior to the start (but after the interupt vector)
-  //[reset vect]
-  //[other vectors...]
-  //[prog size (4 bytes)]
-	//reset
-	//prog
-	//sig
-	  
-	//size includes all bytes but sig
-	uint16_t reset = *(uint16_t*)0;
-
-  if (reset>>8 != 0xC0) //check for short rjmp 
-    return 0;
-
-  uint8_t *start=(uint8_t*)(((uint16_t*)(void*)0)+((reset&0xff)+1));
-  uint8_t sz=*(((uint32_t*)start)-1);
-  if (sz < 2 || sz+4 > FLASHEND) //check for bad values 
-    return 0;
-  return sz;
+	return ((uint16_t*)(((uint8_t*)0)+BOOTSTART))[-1];
 }
 
 uint8_t* getsigptr()
 {
-  uint8_t *sig=((uint8_t*)0)+getsz();
-  return sig;
+	return (((uint8_t*)0)+BOOTSTART)[-2-16];
 }
 
 void lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
@@ -93,223 +85,51 @@ void lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
 	aes128_init(key, &ctx); /* generating the round keys from the 128 bit key */
 
 	memset(data, 0, 16);
-  *(uint32_t*)data=sz;
+	*(uint32_t*)data=sz;
 
 	aes128_enc(data, &ctx);
-  while (sz)
-  {
-  	for(int i=0;i<16 && i<sz;i++)
+	while (sz)
+	{
+		for(int i=0;i<16 && i<sz;i++)
 			data[i]^=m[i];
 		m += 16;
 		sz -= 16;
 		aes128_enc(data, &ctx);
-  }
+	}
 }
 
 uint8_t sigcheck()
 {
 	uint8_t out[16];
-	uint8_t key[]  = { 0x01, 0x23, 0x45, 0x67,
-                   0x89, 0xAB, 0xCD, 0xEF,
-                   0x01, 0x23, 0x45, 0x67,
-                   0x89, 0xAB, 0xCD, 0xEF };
+	uint8_t key[]  = "MRBusBootLoader";
 
 	uint32_t sz = getsz();
-  lenpadcbcmacaes(out, key, (uint8_t*)0, sz);
 	uint8_t* sig = getsigptr();
-  for(int i=0; i<16; i++, sig++)
-    if (out[i] != *sig)
-      return 1;
-  while (sig<=((uint8_t*)0)+FLASHEND)
-    if (*(sig++)!=0xff)
-      return 1;
-  return 0;
+
+	for (uint8_t* p =((uint8_t*)0)+sz; p++; p<sig)
+		if (*p!=0xff)
+			return 1;
+
+	lenpadcbcmacaes(out, key, (uint8_t*)0, sz);
+	for(int i=0; i<16; i++, sig++)
+		if (out[i] != *sig)
+			return 1;
+	return 0;
 }
 
 
 
-void PktHandler(void)
-{
-	uint16_t crc = 0;
-	uint8_t i;
-	uint8_t rxBuffer[MRBUS_BUFFER_SIZE];
-	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
-
-	if (0 == mrbusPktQueuePop(&mrbusRxQueue, rxBuffer, sizeof(rxBuffer)))
-		return;
-
-
-	//*************** PACKET FILTER ***************
-	// Loopback Test - did we send it?  If so, we probably want to ignore it
-	if (rxBuffer[MRBUS_PKT_SRC] == mrbus_dev_addr) 
-		return;
-
-	// Destination Test - is this for us or broadcast?  If not, ignore
-	if (0xFF != rxBuffer[MRBUS_PKT_DEST] && mrbus_dev_addr != rxBuffer[MRBUS_PKT_DEST]) 
-		return;
 	
-	// CRC16 Test - is the packet intact?
-	for(i=0; i<rxBuffer[MRBUS_PKT_LEN]; i++)
-	{
-		if ((i != MRBUS_PKT_CRC_H) && (i != MRBUS_PKT_CRC_L)) 
-			crc = mrbusCRC16Update(crc, rxBuffer[i]);
-	}
-	if ((UINT16_HIGH_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_H]) || (UINT16_LOW_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_L]))
-		return;
-		
-	//*************** END PACKET FILTER ***************
 
+#define MRBUS_TX_BUFFER_DEPTH 8
+#define MRBUS_RX_BUFFER_DEPTH 24
 
-	//*************** PACKET HANDLER - PROCESS HERE ***************
+MRBusPacket mrbusTxPktBufferArray[MRBUS_TX_BUFFER_DEPTH];
+MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
 
-	// Just smash the transmit buffer if we happen to see a packet directed to us
-	// that requires an immediate response
-	//
-	// If we're in here, then either we're transmitting, then we can't be 
-	// receiving from someone else, or we failed to transmit whatever we were sending
-	// and we're waiting to try again.  Either way, we're not going to corrupt an
-	// in-progress transmission.
-	//
-	// All other non-immediate transmissions (such as scheduled status updates)
-	// should be sent out of the main loop so that they don't step on things in
-	// the transmit buffer
-	
-	if ('A' == rxBuffer[MRBUS_PKT_TYPE])
-	{
-		// PING packet
-		txBuffer[MRBUS_PKT_TYPE] = 'a';
-		goto shortreturnsend;
-	}
-	if ('!' == rxBuffer[MRBUS_PKT_TYPE])
-	{
-		// BOOT LOADER STATUS packet
-		loaderactivate=1;
-statussend:
-		txBuffer[MRBUS_PKT_LEN] = 6+3;
-		txBuffer[MRBUS_PKT_TYPE] = '@';
-		for(i=0; i<LOADERSTATBYTES-1; i++)
-	  	if(loaderstatus[i]!=0xff)
-	  		break;
-		txBuffer[6] = i;
-		txBuffer[7] = loaderstatus[i];
-		txBuffer[8] = loaderpage>0;
-
-returnsend:
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		return;	
-	} 
-	else if ('D' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// DATA
-		if (rxBuffer[MRBUS_PKT_LEN]!= 20)
-			return;	
-		uint8_t x = rxBuffer[18];
- 		if(loaderpage<0 || x >= LOADERPKTS || (loaderstatus[x/8]&(1<<(x&7))))
-			return;	
- 		uint16_t addr = loaderpage + x*12;
-		uint16_t *p = (uint16_t *)(rxBuffer+6);
-		cli();
-		for (i=0; i<6 && addr < SPM_PAGESIZE; i++, addr+=2)
-			boot_page_fill (addr, *(p++));
-		sei();
-		loaderstatus[x/8]|=(1<<(x&7));
-		if(rxBuffer[19])
-			goto statussend;
-	}
-	else if ('E' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// ERASE PAGE
-		if (rxBuffer[MRBUS_PKT_LEN]!= 8)
-			return;	
-		//blank statuses
-		for(i=0; i<LOADERSTATBYTES; i++)
-	  	loaderstatus[i]=0;
-		loaderpage = *(uint16_t *)(rxBuffer+6);
-		int x=loaderpage*SPM_PAGESIZE;
-		if (loaderpage<0 || x+SPM_PAGESIZE > BOOTSTART)
-		{
-			loaderpage = -1;
-			return;
-		}
-		cli();
-		boot_rww_enable ();//clears page buffer, strangely.
-		boot_page_erase (loaderpage);
-		sei();
-		boot_spm_busy_wait (); 
-		
-		txBuffer[MRBUS_PKT_TYPE] = 'e';
-shortreturnsend:
-		txBuffer[MRBUS_PKT_LEN] = 6;
-		goto returnsend;
-	}
-	else if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// WRITE PAGE
-		if (rxBuffer[MRBUS_PKT_LEN]!= 6)
-			return;	
-		cli();
-		boot_page_write (loaderpage);     // Store buffer in flash page.
-		loaderpage=-1;
-		sei();
-		boot_spm_busy_wait (); 
-		cli();
-		boot_rww_enable ();
-		sei();
-		txBuffer[MRBUS_PKT_TYPE] = 'w';
-		goto shortreturnsend;
-	}
-	else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// Signature
-		txBuffer[MRBUS_PKT_LEN] = 20;
-		txBuffer[MRBUS_PKT_TYPE] = 's';
-		txBuffer[6]  = '!';
-		txBuffer[7]  = sigcheck();
-		uint8_t* p=getsigptr();
-		for(i=8; i<20; i++, p++)
-			txBuffer[i]  = *p;
-		goto returnsend;
-	}
-	else if ('V' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// Version
-		txBuffer[MRBUS_PKT_LEN] = 19;
-		txBuffer[MRBUS_PKT_TYPE] = 'v';
-		txBuffer[6]  = '!';
-		txBuffer[7]  = BOOTLOADERVER;
-		txBuffer[8]  = SIGNATURE_0;
-		txBuffer[9]  = SIGNATURE_1;
-		txBuffer[10]  = SIGNATURE_2;
-		txBuffer[11]  = SPM_PAGESIZE>>8;
-		txBuffer[12]  = SPM_PAGESIZE;
-		txBuffer[13]  = FLASHEND>>16;
-		txBuffer[14]  = FLASHEND>>8;
-		txBuffer[15]  = FLASHEND;
-		txBuffer[16]  = BOOTSTART>>16;
-		txBuffer[17]  = BOOTSTART>>8;
-		txBuffer[18]  = BOOTSTART;
-
-		goto returnsend;
-	}
-	else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		cli();
-		asm("jmp 0000");
-/*		// Reset
-		cli();
-		wdt_reset();
-		MCUSR &= ~(_BV(WDRF));
-		WDTCSR |= _BV(WDE) | _BV(WDCE);
-		WDTCSR = _BV(WDE);
-		while(1);  // Force a watchdog reset
-*/	}
-
-}
-
-void init(void)
+int main(void)
 {
+	// Application initialization
 	MCUCR = (1<<IVCE);
 	MCUCR = (1<<IVSEL);
 #if 1
@@ -332,19 +152,7 @@ void init(void)
 	{
 		mrbus_dev_addr = 0x03;
 	}
-	
-}
 
-#define MRBUS_TX_BUFFER_DEPTH 8
-#define MRBUS_RX_BUFFER_DEPTH 24
-
-MRBusPacket mrbusTxPktBufferArray[MRBUS_TX_BUFFER_DEPTH];
-MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
-
-int main(void)
-{
-	// Application initialization
-	init();
 	// Initialize MRBus core
 	mrbusPktQueueInitialize(&mrbusTxQueue, mrbusTxPktBufferArray, MRBUS_TX_BUFFER_DEPTH);
 	mrbusPktQueueInitialize(&mrbusRxQueue, mrbusRxPktBufferArray, MRBUS_RX_BUFFER_DEPTH);
@@ -352,43 +160,199 @@ int main(void)
 	sei();	
 
 	//send an "I'm here!" broadcast to help in catching the bootloader
+	uint8_t rxBuffer[MRBUS_BUFFER_SIZE];
 	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
-	txBuffer[MRBUS_PKT_LEN] = 6;
-	txBuffer[MRBUS_PKT_TYPE] = '@';
-	txBuffer[MRBUS_PKT_DEST] = 0xff;
-	txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-
-
-	uint8_t bus_countdown = 100;
-	while (bus_countdown-- > 0 && !loaderactivate)
-	{
-		wdt_reset();
-		_delay_ms(10);
-		if (mrbusPktQueueDepth(&mrbusRxQueue))
-		PktHandler();
-	}
-
-	if(!loaderactivate && !sigcheck())
-	{
-		cli();
-		// Put interrupts back in app land
-		MCUCR = (1<<IVCE);
-		MCUCR = 0;
-		asm("jmp 0000");
-	}
+	rxBuffer[MRBUS_PKT_SRC]=0xff;
+	goto statussend;
 
 	while (1)
 	{
 		wdt_reset();
-
-		// Handle any packets that may have come in
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
-			PktHandler();
-			
-		if (mrbusPktQueueDepth(&mrbusTxQueue))
+		do
+		{
+			uint16_t crc = 0;
+			uint8_t i;
+
+			if (0 == mrbusPktQueuePop(&mrbusRxQueue, rxBuffer, sizeof(rxBuffer)))
+				break;
+
+
+			//*************** PACKET FILTER ***************
+			// Loopback Test - did we send it?  If so, we probably want to ignore it
+			if (rxBuffer[MRBUS_PKT_SRC] == mrbus_dev_addr) 
+				break;
+
+			// Destination Test - is this for us or broadcast?  If not, ignore
+			if (0xFF != rxBuffer[MRBUS_PKT_DEST] && mrbus_dev_addr != rxBuffer[MRBUS_PKT_DEST]) 
+				break;
+	
+			// CRC16 Test - is the packet intact?
+			for(i=0; i<rxBuffer[MRBUS_PKT_LEN]; i++)
+			{
+				if ((i != MRBUS_PKT_CRC_H) && (i != MRBUS_PKT_CRC_L)) 
+					crc = mrbusCRC16Update(crc, rxBuffer[i]);
+			}
+			if ((UINT16_HIGH_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_H]) || (UINT16_LOW_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_L]))
+				break;
+		
+			//*************** END PACKET FILTER ***************
+
+
+			//*************** PACKET HANDLER - PROCESS HERE ***************
+
+			// Just smash the transmit buffer if we happen to see a packet directed to us
+			// that requires an immediate response
+			//
+			// If we're in here, then either we're transmitting, then we can't be 
+			// receiving from someone else, or we failed to transmit whatever we were sending
+			// and we're waiting to try again.  Either way, we're not going to corrupt an
+			// in-progress transmission.
+			//
+			// All other non-immediate transmissions (such as scheduled status updates)
+			// should be sent out of the main loop so that they don't step on things in
+			// the transmit buffer
+	
+			if ('A' == rxBuffer[MRBUS_PKT_TYPE])
+			{
+				// PING packet
+				txBuffer[MRBUS_PKT_TYPE] = 'a';
+		shortreturnsend:
+				txBuffer[MRBUS_PKT_LEN] = 6;
+				goto returnsend;
+			}
+			if ('!' == rxBuffer[MRBUS_PKT_TYPE])
+			{
+				// BOOT LOADER STATUS packet
+				loaderactivate=1;
+		statussend:
+				txBuffer[MRBUS_PKT_LEN] = 10;
+				txBuffer[MRBUS_PKT_TYPE] = '@';
+				for(i=0; i<LOADERSTATBYTES-1; i++)
+					if(loaderstatus[i]!=0xff)
+						break;
+				txBuffer[6] = i;
+				txBuffer[7] = loaderstatus[i];
+				*(uint16_t*)(txBuffer+8)  = loaderpage;
+
+		returnsend:
+				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+				break;	
+			} 
+			else if ('D' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				// DATA
+				if (rxBuffer[MRBUS_PKT_LEN]!= 20)
+					break;	
+				uint8_t x = rxBuffer[18];
+		 		if(loaderpage==0xffff || x >= LOADERPKTS || (loaderstatus[x/8]&(1<<(x&7))))
+					break;	
+		 		uint16_t addr = loaderpage + x*12;
+				uint16_t *p = (uint16_t *)(rxBuffer+6);
+				cli();
+				for (i=0; i<6 && addr < SPM_PAGESIZE; i++, addr+=2)
+					boot_page_fill (addr, *(p++));
+				sei();
+				loaderstatus[x/8]|=(1<<(x&7));
+				if(rxBuffer[19])
+					goto statussend;
+			}
+			else if ('E' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				// ERASE PAGE
+				if (rxBuffer[MRBUS_PKT_LEN]!= 8)
+					break;	
+				//blank statuses
+				for(i=0; i<LOADERSTATBYTES; i++)
+			  	loaderstatus[i]=0;
+				loaderpage = *(uint16_t *)(rxBuffer+6);
+//				uint8_t * dd = (uint8_t[]){loaderpage, loaderpage>>8, (loaderpage+SPM_PAGESIZE), (loaderpage+SPM_PAGESIZE)>>8, BOOTSTART, BOOTSTART>>8, (loaderpage+SPM_PAGESIZE > BOOTSTART)};
+//				debug(7, dd);
+				if (loaderpage+SPM_PAGESIZE > BOOTSTART)
+				{
+					loaderpage = 0xffff;
+					goto statussend;
+				}
+				cli();
+				boot_page_erase (loaderpage);
+				sei();
+				boot_spm_busy_wait (); 
+				cli();
+				boot_rww_enable ();//clears page buffer, strangely.
+				sei();
+		
+				goto statussend;
+			}
+			else if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				// WRITE PAGE
+				if (rxBuffer[MRBUS_PKT_LEN]!= 6 || loaderpage==0xffff)
+					break;	
+				cli();
+				boot_page_write (loaderpage);     // Store buffer in flash page.
+				loaderpage=0xffff;
+				sei();
+				boot_spm_busy_wait (); 
+				cli();
+				boot_rww_enable ();
+				sei();
+
+				goto statussend;
+			}
+			else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				// Signature
+				txBuffer[MRBUS_PKT_LEN] = 20;
+				txBuffer[MRBUS_PKT_TYPE] = 's';
+				txBuffer[6]  = '!';
+				txBuffer[7]  = sigcheck();
+				uint8_t* p=getsigptr();
+				for(i=8; i<20; i++, p++)
+					txBuffer[i]  = *p;
+				goto returnsend;
+			}
+			else if ('V' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				// Version
+				txBuffer[MRBUS_PKT_LEN] = 15;
+				txBuffer[MRBUS_PKT_TYPE] = 'v';
+				txBuffer[6]  = '!';
+				txBuffer[7]  = BOOTLOADERVER;
+				*(uint16_t*)(txBuffer+8)  = SPM_PAGESIZE;
+				*(uint16_t*)(txBuffer+10)  = BOOTSTART;
+				txBuffer[12]  = SIGNATURE_0;
+				txBuffer[13]  = SIGNATURE_1;
+				txBuffer[14]  = SIGNATURE_2;
+
+				goto returnsend;
+			}
+			else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
+			{
+				loaderactivate=0;
+				bus_countdown=0;
+			}
+
+		}while(0);
+		else if (mrbusPktQueueDepth(&mrbusTxQueue))
 			mrbusTransmit();
+		else if (bus_countdown)
+		{
+			bus_countdown--;
+			_delay_ms(10);
+		}
+		else if(!loaderactivate && !sigcheck())
+		{
+			cli();
+			// Put interrupts back in app land
+			MCUCR = (1<<IVCE);
+			MCUCR = 0;
+			asm("jmp 0000");
+		}
+
 	}
+
 }
 
 

@@ -1,10 +1,17 @@
 avr crypto from svn co http://das-labor.org/svn/microcontroller-2/crypto-lib  5906
 sudo pip install intelhex
 
+todo: flow control and echo off
+OK masking
+page buffer with "make page from x" command
+
 
 
 cmds:
 
  2050  python load.py ../mrb-avrtemplate2/src/mrb-avrtemplate2.hex 
  2057  make hex
- 2059  sudo make flash
+ 2059  make flash
+avrdude -c usbtiny -p atmega328p -U flash:r:readback.hex:i
+scp bootloader.c
+laptop:hackerspace_access_control/mrbus_bootloader/bootloader.c && ssh laptop "cd hackerspace_access_control/mrbus_bootloader; make hex" && scp laptop:hackerspace_access_control/mrbus_bootloader/bootloader.hex . && make -t hex
