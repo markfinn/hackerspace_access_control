@@ -1,5 +1,3 @@
-//vectors:  aes, cbcmac, directtoloader(loaderactivate=1 and run somehow.)  mrbus stuff?
-
 /*************************************************************************
 Title:    MRBus bootloader
 Authors:  Mark Finn <mark@mfinn.net>
