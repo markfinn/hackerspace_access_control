@@ -1,9 +1,14 @@
 avr crypto from svn co http://das-labor.org/svn/microcontroller-2/crypto-lib  5906
 sudo pip install intelhex
+sudo pip install pycrypto
+
 
 todo: flow control and echo off
 OK masking
-page buffer with "make page from x" command
+use pagebuffer to speed up
+user interface
+unlock? then eeprom?
+sequence number instead of replies?
 
 
 

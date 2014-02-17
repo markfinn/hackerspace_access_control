@@ -27,6 +27,7 @@ LICENSE:
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 #include <avr/wdt.h>
+#include <avr/pgmspace.h>
 #include <util/delay.h>
 
 #include <stdbool.h>
@@ -52,6 +53,7 @@ uint8_t loaderstatus[LOADERSTATBYTES];
 uint8_t loaderactivate=0;
 uint8_t bus_countdown = 100;
 uint8_t mrbus_dev_addr;
+uint8_t sigbuf[16];
 
 uint8_t progbuf[SPM_PAGESIZE];
 
@@ -68,12 +70,12 @@ void debug(uint8_t len, uint8_t *bytes)
 	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 }
 
-uint8_t __attribute__ ((noinline)) getbootloaderver()
+uint8_t  getbootloaderver()
 {//a function so that the application can ask too.
 	return BOOTLOADERVER;
 }
 
-void __attribute__ ((noinline)) boot_program_page (uint32_t page, uint8_t *buf)
+void  boot_program_page (uint32_t page, uint8_t *buf)
 {//from http://www.nongnu.org/avr-libc/user-manual/group__avr__boot.html#ga7249d12e06789cd306583abf7def8176
 	uint16_t i;
 	uint8_t sreg;
@@ -106,31 +108,39 @@ void __attribute__ ((noinline)) boot_program_page (uint32_t page, uint8_t *buf)
 	SREG = sreg;
 }
 
-uint32_t getsz()
+uint16_t getsz()
 {
-	return ((uint16_t*)(((uint8_t*)0)+BOOTSTART))[-1];
+	uint16_t s = pgm_read_word(BOOTSTART-2);
+	if (s>BOOTSTART-2-16)
+		return 0;
+	return s;
 }
 
-uint8_t* getsigptr()
+void loadsig()
 {
-	return (((uint8_t*)0)+BOOTSTART)-2-16;
+	memcpy_P(sigbuf, (PGM_P)(BOOTSTART-2-16), 16);
 }
 
-void __attribute__ ((noinline)) lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint8_t *m, uint32_t sz)
+uint8_t pgmreadbyte(uint16_t addr)
+{
+	return pgm_read_byte(addr);
+}
+
+void  lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint16_t sz, uint8_t (*dataget)(uint16_t), uint16_t offset)
 {
 	aes128_ctx_t ctx; /* the context where the round keys are stored */
 	aes128_init(key, &ctx); /* generating the round keys from the 128 bit key */
 
 	memset(data, 0, 16);
-	*(uint32_t*)data=sz;
+	*(uint16_t*)data=sz;
 
 	aes128_enc(data, &ctx);
+//debug(4, (uint8_t[]){(sz>>0)&0xff,(sz>>8)&0xff,(sz>>16)&0xff,(sz>>24)&0xff});
 	while (sz)
 	{
-		for(int i=0;i<16 && i<sz;i++)
-			data[i]^=m[i];
-		m += 16;
-		sz -= 16;
+		for(int i=0;i<16 && sz;i++, sz--)
+			data[i]^=dataget(i+offset);
+		offset += 16;
 		aes128_enc(data, &ctx);
 	}
 }
@@ -140,14 +150,15 @@ uint8_t sigcheck()
 	uint8_t out[16];
 	uint8_t key[]  = "MRBusBootLoader";
 
-	uint32_t sz = getsz();
-	uint8_t* sig = getsigptr();
+	uint16_t sz = getsz();
+	loadsig();
+	uint8_t* sig = sigbuf;
 
-	for (uint8_t* p =((uint8_t*)0)+sz;p<sig;p++)
-		if (*p!=0xff)
+	for (uint16_t p = sz;p<BOOTSTART-2-16;p++)
+		if (pgm_read_byte(p)!=0xff)
 			return 1;
 
-	lenpadcbcmacaes(out, key, (uint8_t*)0, sz);
+	lenpadcbcmacaes(out, key, sz, &pgmreadbyte, 0);
 	for(int i=0; i<16; i++, sig++)
 		if (out[i] != *sig)
 			return 1;
@@ -293,7 +304,8 @@ int main(void)
 			{
 				// FILL PAGE BUF
 
-					uint8_t start, len, dest;
+					uint16_t start;
+					uint8_t len, dest;
 					
 				// ERASE buf markers
 				for(i=0; i<LOADERSTATBYTES; i++)
@@ -304,32 +316,33 @@ int main(void)
 					memset(progbuf, rxBuffer[6], SPM_PAGESIZE);
 					goto shortreturnsend;
 				}
-				else if (rxBuffer[MRBUS_PKT_LEN]== 8)
+				else if (rxBuffer[MRBUS_PKT_LEN]== 10)
 				{
 					start= *(uint16_t *)(rxBuffer+6);
-					len=SPM_PAGESIZE;
-					dest=0;
-				}
-				else if (rxBuffer[MRBUS_PKT_LEN]== 12)
-				{
-					start= *(uint16_t *)(rxBuffer+6);
-					len=*(uint16_t *)(rxBuffer+8);
-					dest=*(uint16_t *)(rxBuffer+10);
+					len=rxBuffer[8];
+					dest=rxBuffer[9];
 				}
 				else
 					break;	
 				//todo shorten len if needed, then copy
+				if (dest > SPM_PAGESIZE)
+					dest = SPM_PAGESIZE;
+				if (len > SPM_PAGESIZE - dest)
+					len = SPM_PAGESIZE - dest;
+				if (len > BOOTSTART - start)
+					len = BOOTSTART - start;
+				memcpy_P(progbuf+dest, (PGM_P)start, len);
 
 				goto shortreturnsend;
 			}
-			else if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
+			else if ('#' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
 				// WRITE PAGE
 				if (rxBuffer[MRBUS_PKT_LEN]!= 8)
 					break;	
 				uint16_t page = *(uint16_t *)(rxBuffer+6);
 				boot_program_page (page, progbuf);
-				txBuffer[MRBUS_PKT_TYPE] = 'w';
+				txBuffer[MRBUS_PKT_TYPE] = '$';
 				goto shortreturnsend;
 			}
 			else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
@@ -339,7 +352,8 @@ int main(void)
 				txBuffer[MRBUS_PKT_TYPE] = 's';
 				txBuffer[6]  = '!';
 				txBuffer[7]  = sigcheck();
-				uint8_t* p=getsigptr();
+				//called by sigcheck: loadsig();
+				uint8_t* p=sigbuf;
 				for(i=8; i<20; i++, p++)
 					txBuffer[i]  = *p;
 				goto returnsend;
