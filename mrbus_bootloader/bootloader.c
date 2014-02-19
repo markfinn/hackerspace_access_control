@@ -285,7 +285,11 @@ int main(void)
 				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 				break;	
 			} 
-			else if ('D' == rxBuffer[MRBUS_PKT_TYPE]) 
+			// Destination Test - is this for us ?   don't respond to these other commands on broadcast
+			if (mrbus_dev_addr != rxBuffer[MRBUS_PKT_DEST]) 
+				break;
+			
+			if ('D' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
 				// DATA
 				if (rxBuffer[MRBUS_PKT_LEN]!= 20)
