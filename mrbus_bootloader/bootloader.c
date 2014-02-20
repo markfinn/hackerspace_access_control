@@ -78,7 +78,7 @@ uint8_t  getbootloaderver()
 	return BOOTLOADERVER;
 }
 
-void  boot_program_page (uint32_t page, uint8_t *buf)
+void  __attribute__ ((section (".text_pageload"))) boot_program_page  (uint32_t page, uint8_t *buf) 
 {//from http://www.nongnu.org/avr-libc/user-manual/group__avr__boot.html#ga7249d12e06789cd306583abf7def8176
 	uint16_t i;
 	uint8_t sreg;

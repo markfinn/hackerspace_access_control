@@ -139,6 +139,11 @@ SECTIONS
      _edata = . ;
      PROVIDE (__data_end = .) ;
   }  > data
+  .pageload	 0x7e8e : AT (0x7e8e) 
+  {
+    *(.text_pageload)
+    KEEP(*(.text_pageload))
+	} > text
   .sbox	 0x7f00 : AT (0x7f00) 
   {
     . = ALIGN(256);
