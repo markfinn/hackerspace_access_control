@@ -40,6 +40,10 @@ LICENSE:
 
 #include <avr/signature.h>
 
+
+#define initpins PORTB = PORTC = PORTD = 0xff;
+
+
 #define BOOTLOADERVER 1
 
 #define LOADERPKTS ((SPM_PAGESIZE+11)/12)
@@ -47,6 +51,7 @@ LICENSE:
 #if LOADERPKTS > 256
 #error LOADERPKTS > 256
 #endif
+
 uint8_t loaderstatus[LOADERSTATBYTES];
 uint8_t loaderactivate=0;
 uint8_t bus_countdown = 100;
@@ -175,6 +180,10 @@ MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
 
 int main(void)
 {
+
+	initpins;
+
+
 	// Application initialization
 	MCUCR = (1<<IVCE);
 	MCUCR = (1<<IVSEL);
