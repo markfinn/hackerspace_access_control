@@ -151,7 +151,10 @@ void  lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint16_t sz, uint8_t (*datage
 uint8_t sigcheck()
 {
 	uint8_t out[16];
-	uint8_t key[]  = "MRBusBootLoader";
+	uint8_t key[16];
+//	extern PGM_P user_key; not working.. linker can't find symbol?
+//	memcpy_P(key, user_key, 16);
+	memcpy_P(key, (PGM_P)0x7054, 16);
 
 	uint16_t sz = getsz();
 	loadsig();

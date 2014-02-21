@@ -31,5 +31,8 @@ user_vectors3:
  rjmp __vector_20  ; 0x50 !used interrupt!
 user_vectors4:
  rjmp boot_program_page ; vector
+user_key:
+ .ascii "MRBusBootLoader\x00"
+user_vectors5:
 
 
