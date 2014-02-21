@@ -107,7 +107,7 @@ $(BASE_NAME).elf: $(OBJS) bootloader.x
 
 $(BASE_NAME).hex: $(BASE_NAME).elf
 	rm -f $(BASE_NAME).hex $(BASE_NAME).eep.hex
-	avr-objcopy -j .text -j .data -j .sbox -O ihex $(BASE_NAME).elf $(BASE_NAME).hex
+	avr-objcopy -j .text -j .data -j .pageload -j .sbox -O ihex $(BASE_NAME).elf $(BASE_NAME).hex
 	avr-size $(BASE_NAME).hex
 
 # debugging targets:
