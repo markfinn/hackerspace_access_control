@@ -181,7 +181,9 @@ class mrbus(object):
   def pump(self, timeout=None):
     done=False
     to = self.mrbs.serial.timeout
-    self.mrbs.serial.timeout=max(0,timeout)
+    if timeout != None:
+      timeout=max(0,timeout)
+    self.mrbs.serial.timeout=timeout
     while not done:
       p = self.getpkt()
       if p:
@@ -225,11 +227,11 @@ class mrbus(object):
 
 
         
-  def scannodes(self, pkttype='A', wait=2):
+  def scannodes(self, pkttype=ord('A'), rettype=ord('a'), wait=2):
     targets=set()
 
     def pingback(p):
-      if p.src!=self.mrbs.addr and p.src!=0 and p.src!=0xff:
+      if p.src!=self.mrbs.addr and p.src!=0 and p.src!=0xff and p.cmd==rettype:
         targets.add(p.src)
       return False
 
