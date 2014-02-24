@@ -364,12 +364,20 @@ int main(void)
 				// Signature
 				txBuffer[MRBUS_PKT_LEN] = 20;
 				txBuffer[MRBUS_PKT_TYPE] = 's';
-				txBuffer[6]  = '!';
-				txBuffer[7]  = sigcheck();
+				txBuffer[6]  = sigcheck();
+				uint16_t sz = getsz();
+				txBuffer[7]  = sz;
+				txBuffer[8]  = sz>>8;
 				//called by sigcheck: loadsig();
 				uint8_t* p=sigbuf;
-				for(i=8; i<20; i++, p++)
+				for(i=9; i<9+5; i++, p++)
 					txBuffer[i]  = *p;
+				uint8_t out[16];
+				uint8_t key[16]="MRBusBootLoader";
+				lenpadcbcmacaes(out, key, sz, &pgmreadbyte, 0);
+				for(p=out; i<20; i++, p++)
+					txBuffer[i]  = *p;
+
 				goto returnsend;
 			}
 			else if ('V' == rxBuffer[MRBUS_PKT_TYPE]) 
