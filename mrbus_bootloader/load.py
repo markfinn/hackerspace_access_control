@@ -4,6 +4,8 @@ import sys
 import mrbus
 import intelhex
 from Crypto.Cipher import AES
+import argparse
+import os
 
 def strfrombytes(b):
   s=''
@@ -147,8 +149,47 @@ def bootload(node, prog):
 
 
 
+def intargparse(arg):
+  if arg==None:
+    return arg
+  elif arg.startswith('0x') or arg.startswith('0X'):
+    return int(arg[2:], 16)
+  else:
+    return int(arg)
+
+
 if __name__ == '__main__':
-  mrb = mrbus.mrbus('/dev/ttyUSB0', addr=0xfe)#, logall=True, logfile=sys.stderr)
+  parser = argparse.ArgumentParser(description='program an mrbus node via the bootloader')
+  parser.add_argument('-p', '--port', type=str,help='port for mrbus CI2 interface. Will guess /dev/ttyUSB? if not specified')
+  parser.add_argument('-a', '--addr-host', help='mrbus address to use for host.  Will scan for an unused address if not specified')
+  parser.add_argument('-d', '--addr', default=None, help='mrbus address of node to program.  Will scan for a singular node in bootloader mode if not specified')
+  parser.add_argument('-x', '--reset-to-bootloader', action='store_true', help='send the target node a reset (\'X\') command then to attempt to enter the bootloader. Implies -l')
+  parser.add_argument('-l', '--listen-for-bootloader', action='store_true', help='wait for the node to send a bootloader-waiting packet, then halt the normal boot processs in bootloader mode')
+  parser.add_argument('-r', '--reset-when-done', action='store_true', help='reset the target after we are finished')
+#  parser.add_argument('-s', '--force-sign', action='store_true', help='sign the object even if it seems to have a signature')
+#  parser.add_argument('-k', '--key-file', type=str, help='key file to use if signing with a proprietary shared key. reads the first 16 bytes from the file.')
+  parser.add_argument('file', type=str,  help='file to load')
+  args = parser.parse_args()
+
+  args.addr_host = intargparse(args.addr_host)
+  args.addr = intargparse(args.addr)
+
+  if args.reset_to_bootloader and None == args.addr:
+     print 'I need a dest address if you want me to reset something'
+     print 'Well, I could use a ping scan after I figure out my own address, then if there is on;y one node, assume that\'s what you meant....  but no.'
+     sys.exit(1)
+
+  if args.port == None:
+    args.port = [d for d in os.listdir('/dev/') if d.startswith('ttyUSB')]
+    if len(args.port) == 0:
+      print 'no port specified, and can\'t find a default one'
+      sys.exit(1)
+    elif len(args.port) > 1:
+      print 'no port specified, and there is more than one to guess from.  giving up.'
+      sys.exit(1)
+    args.port='/dev/'+args.port[0]
+  
+  mrb = mrbus.mrbus(args.port, addr=args.addr_host, logall=True, logfile=sys.stderr)
 
   def debughandler(p):
     if p.cmd==ord('*'):
@@ -157,26 +198,72 @@ if __name__ == '__main__':
     return False #dont eat packet
   mrb.install(debughandler, 0)
 
-  nodes = mrb.scannodes(pkttype='!')
-  if len(nodes) == 0:
-    print 'no node found in bootloader node. improve this program to catch it on start up.'
-    sys.exit(1)
-  if len(nodes) > 1:
-    print 'found more than one bootloader node. improve this program to deal with it.'
-    sys.exit(1)
 
-  dest = nodes[0]
-  node = mrb.getnode(dest)
+  if args.addr == None:
+    nodes = mrb.scannodes(pkttype='!', rettype=0x40)
+    if len(nodes) == 0:
+      print 'no node found in bootloader mode.'
+      sys.exit(1)
+    if len(nodes) > 1:
+      print 'found more than one node in bootloader mode. specify an address.'
+      sys.exit(1)
+    args.addr = nodes[0]
 
-  ih = intelhex.IntelHex(sys.argv[1])
-  print ih.minaddr()
-  print ih.maxaddr()
+
+
+  print 'loading to node 0x%02X'%args.addr
+  node = mrb.getnode(args.addr)
+
+
+
+  if args.reset_to_bootloader:
+    args.listen_for_bootloader=True
+    print 'sending reset to get in bootloader mode'
+    node.sendpkt(['X'])
+
+  if args.listen_for_bootloader:
+    print 'waiting for bootloader announce'
+    t=time.time()
+    p=None
+    while time.time()-t < 100:
+      tn=time.time()
+      p = node.getpkt(timeout=100+t-time.time())
+      if p and p.cmd==0x40:
+        break
+    else:
+      print 'didn\'t see the node come up in bootloader mode'
+      sys.exit(1)    
+
+
+
+  ih = intelhex.IntelHex(args.file)
+  print ih.minaddr(), ih.maxaddr()
   prog=[ih[ii] for ii in xrange(ih.maxaddr()+1)]
   if len(prog) > 0x7000-18:
-    print 'too long'
+    print 'program too long'
     sys.exit(1)
+
   prog=prog+([0xff]*(0x7000-18 - len(prog)))+[ord(s) for s in sign(prog)]+[len(prog)&0xff, (len(prog)>>8)&0xff]
-  print len(prog)
+
   bootload(node, prog)
+
+  node.sendpkt(['S'])
+  while True:
+    p = node.getpkt(timeout=1)
+    if p and p.cmd==ord('s'):
+      if p.data[0] != 0x21 or p.data[1] != 0:
+        print 'signature doesn\'t verify.'
+        print p
+        sys.exit(1)
+      break
+    elif p==None:
+      node.sendpkt(['S'])
+  else:
+    print 'cant get sig at end'
+    sys.exit(1)    
+
+
+  if args.reset_when_done:
+    node.sendpkt(['X'])
 
 

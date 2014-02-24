@@ -20,3 +20,4 @@ cmds:
 avrdude -c usbtiny -p atmega328p -U flash:r:readback.hex:i
 scp bootloader.c
 laptop:hackerspace_access_control/mrbus_bootloader/bootloader.c && ssh laptop "cd hackerspace_access_control/mrbus_bootloader; make hex" && scp laptop:hackerspace_access_control/mrbus_bootloader/bootloader.hex . && make -t hex
+
