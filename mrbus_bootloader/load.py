@@ -264,6 +264,6 @@ if __name__ == '__main__':
 
 
   if args.reset_when_done:
-    node.sendpkt(['X'])
+    node.sendpkt(['X', 1])
 
 

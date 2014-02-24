@@ -397,8 +397,21 @@ int main(void)
 			}
 			else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
-				loaderactivate=0;
-				bus_countdown=0;
+				if (rxBuffer[MRBUS_PKT_LEN]== 7 && rxBuffer[6])
+				{
+					loaderactivate=0;
+					bus_countdown=0;
+				}
+				else
+				{
+					// Reset
+					cli();
+					wdt_reset();
+					MCUSR &= ~(_BV(WDRF));
+					WDTCSR |= _BV(WDE) | _BV(WDCE);
+					WDTCSR = _BV(WDE);
+					while(1);  // Force a watchdog reset
+				}
 			}
 
 		}while(0);
