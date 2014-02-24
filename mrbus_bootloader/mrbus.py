@@ -62,7 +62,7 @@ class mrbusSimple(object):
   def __init__(self, port, addr, logfile=None, logall=False):
 
     if type(port)==str:
-      port = serial.Serial(port, 115200, timeout=0)
+      port = serial.Serial(port, 115200, timeout=0, rtscts=True)
 
     self.serial = port
 
@@ -73,6 +73,7 @@ class mrbusSimple(object):
     self.log(0, "instantiated mrbusSimple from %s"%port.name)
 
     self.addr=addr
+#    self.buf=deque()
 
 
   def log(self, error, msg):
@@ -86,10 +87,24 @@ class mrbusSimple(object):
       s="  log:"
     self.logfile.write(s+repr(msg)+'\n')
 
+#needs timeout functionality
+#  def readline(self)
+#    while not self.linebuf():
+#      r=self.serial.read(max(1, self.serial.inWaiting()))
+#      while '\n' in r:
+#        i = r.index('\n')
+#        self.linebuf.append(list(self.linecbuf)+r[:i+1]        
+#        self.linecbuf=deque()
+#        r=r[i+1:]
+#      if r:
+#        self.linecbuf.extend(r)
+#    return self.linebuf.leftpop()
+
 
   def getpkt(self):
     while 1:
       l = self.serial.readline()
+#      self.readline()
       if not l:
         return None
       if l[-1] != '\n' and l[-1] != '\r':
@@ -118,13 +133,13 @@ class mrbusSimple(object):
     s+=";\r"
     self.log(0, '>>>'+s)
     self.serial.write(s)
-    time.sleep(.05)        
+    time.sleep(.05)
 
 
 class mrbus(object):
   def __init__(self, port, addr=None, logfile=None, logall=False):
     if type(port)==str:
-      port = serial.Serial(port, 115200)
+      port = serial.Serial(port, 115200)#, rtscts=True)
 
     self.mrbs = mrbusSimple(port, addr, logfile, logall)
 
@@ -295,7 +310,7 @@ def mrbussimple_ex(ser):
 
 
 if __name__ == '__main__':
-  with serial.Serial('/dev/ttyUSB0', 115200, timeout=0) as ser:
+  with serial.Serial('/dev/ttyUSB0', 115200, timeout=0, rtscts=True) as ser:
 
 #    mrbussimple_ex(ser)
 #    mrbus_ex(ser)
