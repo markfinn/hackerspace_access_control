@@ -70,40 +70,38 @@ def bootload(node, prog):
   if None == loadersig: sys.exit(1)
 
   #OK, we seem to be safe
-  print loaderstatus
-  print loaderversion
-  print loadersig
+  print 'Status:', loaderstatus
+  print 'Version:', loaderversion
+  print 'Signature:', loadersig
 
   pagesize=loaderversion.data[2]|(loaderversion.data[3]<<8)
 
 
-  def writepage(pageaddr, data):
+  def writepage(pageaddr, data, needStatusReset, prevdata=None):
     print'writepage', pageaddr
+    
     def dountillreply(cmd, rep=None, to=5):
+      #print 'dountillreply', cmd, rep, to
       if rep==None:
         rep=ord(cmd[0].lower())
+      node.sendpkt(cmd)
+      start=time.time()
+      sent=1
+      now=start
       while True:
-        node.sendpkt(cmd)
-        p = node.getpkt(timeout=1)
+        p = node.getpkt(timeout=max(0, start+min(sent, to)-now))
+        now=time.time()
         if p and p.cmd==rep:
-          print p
-          return
-        elif p==None:
-          print 'fail',
-          to-=1
-          if to == 0:
-            print 'giving up'
-            sys.exit(1)
+          #print p
+          return p
+        elif start+to <= now:
+          print 'giving up'
+          sys.exit(1)
+        elif start+sent-now > 0:
+          print 'timeout->retry ',
+          node.sendpkt(cmd)
+          sent+=1
 
-    def requirestatus():
-      while True:
-        p = node.getpkt(timeout=1)
-        if p and p.cmd==ord('@'):
-          print p
-          return p.data[2]|(p.data[3]<<8)
-        elif p==None:
-          print 'fail',
-          node.sendpkt(['!'])
 
     def senddata(data):
       z=data[0]
@@ -111,16 +109,17 @@ def bootload(node, prog):
         if x!=z:
           break
       else:
-        print 'sendf short', z
+        print 'send short', z
         dountillreply(['F', z])
         return
 
-      print 'sendf'
-      dountillreply(['F', 0])
+      if needStatusReset:
+        print 'send 0 for status reset'
+        dountillreply(['F', 0])
           
       #D[12]xs
       #@ if s
-      print 'sendd'
+      print 'send data'
       tosend=set(xrange((pagesize+11)//12))
       while tosend:
         i=tosend.pop()
@@ -131,21 +130,27 @@ def bootload(node, prog):
         if stat:
           p = node.getpkt(timeout=2)
           if p:
-            print p
-            tosend|=set((p.data[0]*8+k for k in xrange(8) if p.data[0]*8+k < (pagesize+11)//12 and p.data[1]&(1<<k)==0))
+            failed=set((p.data[0]*8+k for k in xrange(8) if p.data[0]*8+k < (pagesize+11)//12 and p.data[1]&(1<<k)==0))
+            tosend|=failed
+            if failed:
+              print 'failed, retry:', failed
           else:
             tosend|=set([i])
 
 
-    senddata(data)
+    if prevdata!=data:
+      senddata(data)
 
   #W
   #w
-    print 'sendw'
+    print 'write'
     dountillreply(['#', pageaddr, pageaddr>>8], rep=ord('$'))
 
+  oldData=None
   for page in xrange(0//pagesize, (len(prog)+pagesize-1)//pagesize):
-    writepage(page*pagesize, prog[page*pagesize: (page+1)*pagesize])
+    data=prog[page*pagesize: (page+1)*pagesize]
+    writepage(page*pagesize, data, True, oldData)#change StatusResetNeeded when the newer bootloader builds.
+    oldData=data
 
 
 
@@ -189,7 +194,7 @@ if __name__ == '__main__':
       sys.exit(1)
     args.port='/dev/'+args.port[0]
   
-  mrb = mrbus.mrbus(args.port, addr=args.addr_host, logall=True, logfile=sys.stderr)
+  mrb = mrbus.mrbus(args.port, addr=args.addr_host)#, logall=True, logfile=sys.stdout, extra=True)
 
   def debughandler(p):
     if p.cmd==ord('*'):
@@ -251,7 +256,7 @@ if __name__ == '__main__':
   while True:
     p = node.getpkt(timeout=1)
     if p and p.cmd==ord('s'):
-      if p.data[0] != 0x21 or p.data[1] != 0:
+      if p.data[0] != 0:
         print 'signature doesn\'t verify.'
         print p
         sys.exit(1)

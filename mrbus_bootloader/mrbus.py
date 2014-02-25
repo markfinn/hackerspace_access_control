@@ -50,8 +50,16 @@ class node(object):
     self.mrb.sendpkt(self.addr, data)
 
   def getpkt(self, timeout=None):
-    if len(self.pkts) == 0:
-      self.mrb.pump(timeout=timeout)
+    if timeout==None:
+      while len(self.pkts) == 0:
+        self.mrb.pump(timeout=None)
+    else:
+      start = time.time()
+      now = start
+      while now - start <= timeout and len(self.pkts)==0:
+        self.mrb.pump(timeout=start + timeout - now)
+        now = time.time()
+
     if len(self.pkts) == 0:
       return None
     return self.pkts.popleft()
@@ -59,12 +67,23 @@ class node(object):
 
 
 class mrbusSimple(object):
-  def __init__(self, port, addr, logfile=None, logall=False):
+  def __init__(self, port, addr, logfile=None, logall=False, extra=False):
 
     if type(port)==str:
-      port = serial.Serial(port, 115200, timeout=0, rtscts=True)
+      port = serial.Serial(port, 115200, timeout=.1, rtscts=True)
 
     self.serial = port
+
+    time.sleep(.1)
+    while port.inWaiting():
+      port.read(port.inWaiting())
+    port.write(':CMD NS=00;\r')
+    if extra:
+      port.write(':CMD MM=00;\r')
+    else:
+      port.write(':CMD MM=01;\r')
+  
+    port.timeout=0
 
     self.pktlst=[]
 
@@ -102,24 +121,26 @@ class mrbusSimple(object):
 
 
   def getpkt(self):
-    while 1:
-      l = self.serial.readline()
+    l = self.serial.readline()
 #      self.readline()
-      if not l:
-        return None
-      if l[-1] != '\n' and l[-1] != '\r':
-        self.log(1, '<<<'+l)
-        continue
-      l2=l.strip()
-      if len(l2)<2 or l2[0]!='P' or l2[1]!=':':
-        self.log(1, '<<<'+l)
-        continue
-      d=[int(v,16) for v in l2[2:].split()]
-      if len(d)<6 or len(d)!=d[2]:
-        self.log(1, '<<<'+l)
-        continue
+    if not l:
+      return None
+    if l[-1] != '\n' and l[-1] != '\r':
+      self.log(1, '<<<'+l)
+      return None
+    l2=l.strip()
+    if l2 == 'Ok':
       self.log(0, '<<<'+l)
-      return packet(d[0], d[1], d[5], d[6:])
+      return None
+    if len(l2)<2 or l2[0]!='P' or l2[1]!=':':
+      self.log(1, '<<<'+l)
+      return None
+    d=[int(v,16) for v in l2[2:].split()]
+    if len(d)<6 or len(d)!=d[2]:
+      self.log(1, '<<<'+l)
+      return None
+    self.log(0, '<<<'+l)
+    return packet(d[0], d[1], d[5], d[6:])
 
 
   def sendpkt(self, dest, data, src=None):
@@ -133,15 +154,13 @@ class mrbusSimple(object):
     s+=";\r"
     self.log(0, '>>>'+s)
     self.serial.write(s)
-    time.sleep(.05)
-
 
 class mrbus(object):
-  def __init__(self, port, addr=None, logfile=None, logall=False):
+  def __init__(self, port, addr=None, logfile=None, logall=False, extra=False):
     if type(port)==str:
-      port = serial.Serial(port, 115200)#, rtscts=True)
+      port = serial.Serial(port, 115200, rtscts=True)
 
-    self.mrbs = mrbusSimple(port, addr, logfile, logall)
+    self.mrbs = mrbusSimple(port, addr, logfile, logall, extra)
 
     self.pktlst=[]
     self.handlern=0

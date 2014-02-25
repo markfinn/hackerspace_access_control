@@ -356,6 +356,9 @@ int main(void)
 					break;	
 				uint16_t page = *(uint16_t *)(rxBuffer+6);
 				boot_program_page (page, progbuf);
+				// ERASE buf markers
+				for(i=0; i<LOADERSTATBYTES; i++)
+			  	loaderstatus[i]=0;
 				txBuffer[MRBUS_PKT_TYPE] = '$';
 				goto shortreturnsend;
 			}
