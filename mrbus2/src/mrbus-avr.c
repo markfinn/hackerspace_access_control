@@ -18,13 +18,28 @@ static uint8_t mrbusPriority;
 MRBusPktQueue mrbusRxQueue;
 MRBusPktQueue mrbusTxQueue;
 
+#if MR_BUS_WAIT_TYPE == 0
+#define mrbwaitsetup()
+#define mrbwait(x) _delay_us(20*(x))
+
+
+#elif MR_BUS_WAIT_TYPE == 1
+extern volatile uint16_t ticks50khz;
+uint16_t mrbticks;
+#define mrbwaitsetup() do{mrbticks=ticks50khz;}while(0)
+#define mrbwait(x)	do {while ((int16_t)(ticks50khz-mrbticks) < (x)) ; mrbticks+=(x);}while(0)
+
+#endif
+
 uint8_t mrbusArbBitSend(uint8_t bitval)
 {
 	uint8_t slice;
 	uint8_t tmp = 0;
 
+#if MR_BUS_WAIT_TYPE == 0
 	cli();
-	if (bitval)
+#endif
+ 	if (bitval)
 		MRBUS_PORT &= ~_BV(MRBUS_TXE);
 	else
 		MRBUS_PORT |= _BV(MRBUS_TXE);
@@ -38,12 +53,14 @@ uint8_t mrbusArbBitSend(uint8_t bitval)
 			{
 				MRBUS_PORT &= ~_BV(MRBUS_TXE);
 				MRBUS_DDR &= ~_BV(MRBUS_TX);
+#if MR_BUS_WAIT_TYPE == 0
 				sei();
+#endif
 				return(1);
 			}
 
 		}
-		_delay_us(20);
+		mrbwait(1);//wait 20us
 	}
 	return(0);
 }
@@ -222,9 +239,10 @@ uint8_t mrbusTransmit(void)
 
 	/* Now go into critical timing loop */
 	/* Note that status is abused to calculate bus wait */
-	status = ((mrbusLoneliness + mrbusPriority) * 10) + (mrbusTxBuffer[MRBUS_PKT_SRC] & 0x0F);
+	status = ((mrbusLoneliness + mrbusPriority) * 5) + (mrbusTxBuffer[MRBUS_PKT_SRC] & 0x0F) + 22;
 
-	_delay_ms(2);
+	mrbwaitsetup();
+	mrbwait(100); //wait 2ms
 
 	// Return if activity - we may have a packet to receive
 	// Application is responsible for waiting 10ms or for successful receive
@@ -250,22 +268,10 @@ uint8_t mrbusTransmit(void)
 		mrbusRxIndex = 0;
 	}
 
-	for (i = 0; i < 44; i++)
-	{
-		_delay_us(10);
-		if (0 == (MRBUS_PIN & _BV(MRBUS_RX)))
-		{
-			MRBUS_DDR &= ~_BV(MRBUS_TX);
-			if (mrbusLoneliness)
-				mrbusLoneliness--;
-			return(1);
-		}
-	}
-
 	// Now, wait calculated time from above
 	for (i = 0; i < status; i++)
 	{
-		_delay_us(10);
+		mrbwait(1); //wait 20us
 		if (0 == (MRBUS_PIN & _BV(MRBUS_RX)))
 		{
 			MRBUS_DDR &= ~_BV(MRBUS_TX);

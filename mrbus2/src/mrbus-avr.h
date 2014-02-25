@@ -34,6 +34,12 @@ LICENSE:
 #ifndef MRBUS_AVR_H
 #define MRBUS_AVR_H
 
+#ifndef MR_BUS_WAIT_TYPE
+#define MR_BUS_WAIT_TYPE 0
+#endif
+
+
+
 // AVR type-specific stuff
 // Define the UART port and registers used for XBee communication
 // Follows the format of the AVR UART library by Fleury/Sharpe
