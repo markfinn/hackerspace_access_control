@@ -26,8 +26,18 @@ MRBusPktQueue mrbusTxQueue;
 #elif MR_BUS_WAIT_TYPE == 1
 extern volatile uint16_t ticks50khz;
 uint16_t mrbticks;
-#define mrbwaitsetup() do{mrbticks=ticks50khz;}while(0)
-#define mrbwait(x)	do {while ((int16_t)(ticks50khz-mrbticks) < (x)) ; mrbticks+=(x);}while(0)
+#define mrbwaitsetup() do{ATOMIC_BLOCK(ATOMIC_RESTORESTATE){mrbticks=ticks50khz;}}while(0)
+void mrbwait(int16_t x){
+	int16_t z;
+	do 
+	{
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+			z=ticks50khz-mrbticks;
+		}
+	} while (z < x);
+	mrbticks+=(x);
+}
 
 #endif
 
