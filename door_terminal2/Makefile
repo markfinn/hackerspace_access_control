@@ -46,6 +46,7 @@ F_CPU   = 20000000  # Hz
 FUSE_L  = 0xD7
 FUSE_H  = 0xD1
 FUSE_E  = 0x04
+BOOTSTART = 0x7000#0x3800#in words
 
 # ATmega328P 12MHz @ 3.3V
 #DEVICE  = atmega328p
@@ -75,24 +76,20 @@ FUSE_E  = 0x04
 #FUSE_H  = 0xD5
 #FUSE_E  = 0x00
 
-
+BUSLOAD = python ../../mrbus_bootloader/load.py -p /dev/ttyUSB0 -a 0xfe -d 0x5c
 
 # MRBus
-DEFINES = -DMRBUS
+DEFINES = -DMRBUS -DBOOTSTART=$(BOOTSTART)
 MRBPATH = ../mrbus2/src
+MRBOOTPATH = ../mrbus_bootloader
 SRCS = $(BASE_NAME).c $(MRBPATH)/mrbus-avr.c  $(MRBPATH)/mrbus-crc.c  $(MRBPATH)/mrbus-queue.c
-INCS =  $(MRBPATH)/mrbus.h  $(MRBPATH)/mrbus-avr.h
-
-# MRBee
-#DEFINES = -DMRBEE -DMRBEE_BAUD=115200
-#SRCS = $(BASE_NAME).c ../../mrbus/src/mrbus-crc.c ../../mrbee/src/mrbee.c ../../mrbee/src/xbee.c
-#INCS = ../../mrbus/src/mrbus.h ../../mrbee/src/mrbee.h ../../mrbee/src/xbee.h
+INCS =  $(MRBPATH)/mrbus.h  $(MRBPATH)/mrbus-avr.h $(MRBOOTPATH)/mrbus_bootloader_builtins.h
 
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) -B1
 AVRDUDE_SLOW = avrdude -c usbtiny -p $(DEVICE) -B32
 
 OBJS = ${SRCS:.c=.o}
-INCLUDES = -I. -I $(MRBPATH) 
+INCLUDES = -I. -I $(MRBPATH) -I $(MRBOOTPATH)
 CFLAGS  = $(INCLUDES) -Wall -O2 -std=gnu99 -ffunction-sections -fdata-sections
 LDFLAGS = -Wl,-gc-sections
 
@@ -138,7 +135,7 @@ flash: $(BASE_NAME).hex
 
 # rule for uploading firmware:
 busload: $(BASE_NAME).hex
-	python ../mrbus_bootloader/load.py $(BASE_NAME).hex
+	$(BUSLOAD) -x -r -c -s -- $(BASE_NAME).hex
 
 # rule for deleting dependent files (those which can be built by Make):
 clean:

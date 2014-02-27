@@ -26,10 +26,13 @@ LICENSE:
 #include <util/delay.h>
 
 #include "mrbus.h"
+#include "mrbus_bootloader_builtins.h"
 
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
+
+aes128_ctx_t master_aes_ctx;
 
 #define DD_SS     PINB2
 #define DD_MOSI     PINB3
@@ -68,7 +71,6 @@ ISR(TIMER1_OVF_vect)
 
 ISR(SPI_STC_vect)
 {
-idle
 
 
 }
@@ -162,18 +164,20 @@ void PktHandler(void)
 		// Version
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		txBuffer[MRBUS_PKT_LEN] = 16;
+		txBuffer[MRBUS_PKT_LEN] = 18;
 		txBuffer[MRBUS_PKT_TYPE] = 'v';
-		txBuffer[6]  = MRBUS_VERSION_WIRED;
-		txBuffer[7]  = 0; // Software Revision
-		txBuffer[8]  = 0; // Software Revision
-		txBuffer[9]  = 0; // Software Revision
-		txBuffer[10]  = 0; // Hardware Major Revision
-		txBuffer[11]  = 0; // Hardware Minor Revision
-		txBuffer[12] = 'T';
-		txBuffer[13] = 'M';
-		txBuffer[14] = 'P';
-		txBuffer[15] = 'L';
+		txBuffer[6]  = 'N';
+		txBuffer[7]  = 'f';
+		txBuffer[8]  = 'c';
+		txBuffer[9]  = 'D';
+		txBuffer[10]  = 'o';
+		txBuffer[11]  = 'o';
+		txBuffer[12]  = 'r';
+		txBuffer[13]  = 0; // Software Revision
+		txBuffer[14]  = 0; // Software Revision
+		txBuffer[15]  = 0; // Software Revision
+		txBuffer[16]  = 0; // Hardware Major Revision
+		txBuffer[17]  = 0; // Hardware Minor Revision
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
@@ -187,6 +191,25 @@ void PktHandler(void)
 		WDTCSR = _BV(WDE);
 		while(1);  // Force a watchdog reset
 		sei();
+	}
+	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// aes test
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		txBuffer[MRBUS_PKT_LEN] = 20;
+		txBuffer[MRBUS_PKT_TYPE] = 'z';
+    uint8_t l = min(14, rxBuffer[MRBUS_PKT_LEN]-6);
+		uint8_t buf[16];
+		for(i=0;i<l;i++)
+		  buf[i] = rxBuffer[6+i];
+		for(;i<16;i++)
+		  buf[i] = 0;
+		aes128_enc(buf, &master_aes_ctx);
+		for(i=0;i<14;i++)
+		  txBuffer[6+i] = buf[i];
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
 	}
 
 	// FIXME:  Insert code here to handle incoming packets specific
@@ -211,7 +234,7 @@ void init(void)
 	// Set MOSI and SCK output, all others input
 	DDR_SPI = (1<<DD_MOSI)|(1<<DD_SCK);
 	// Enable SPI, Master, set clock rate fck/16
-	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);
+//	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);
 	
 	// Clear watchdog (in the case of an 'X' packet reset)
 	MCUSR = 0;
@@ -263,6 +286,8 @@ void init(void)
 	busVoltage = 0;
 	ADCSRA |= _BV(ADEN) | _BV(ADSC) | _BV(ADIE) | _BV(ADIF);
 */
+
+aes128_init("yourkeygoeshere", &master_aes_ctx);
 }
 
 #define MRBUS_TX_BUFFER_DEPTH 4
