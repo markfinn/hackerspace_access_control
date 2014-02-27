@@ -44,7 +44,7 @@ LICENSE:
 #define initpins PORTB = PORTC = PORTD = 0xff;
 
 
-#define BOOTLOADERVER 1
+#define BOOTLOADERVER 2
 
 #define LOADERPKTS ((SPM_PAGESIZE+11)/12)
 #define LOADERSTATBYTES ((LOADERPKTS+7)/8)
@@ -148,6 +148,14 @@ void  lenpadcbcmacaes(uint8_t *data, uint8_t *key, uint16_t sz, uint8_t (*datage
 	}
 }
 
+uint8_t ffcheck(uint16_t sz)
+{
+	for (uint16_t p = sz;p<BOOTSTART-2-16;p++)
+		if (pgm_read_byte(p)!=0xff)
+			return 1;
+	return 0;
+}
+
 uint8_t sigcheck()
 {
 	uint8_t out[16];
@@ -160,9 +168,8 @@ uint8_t sigcheck()
 	loadsig();
 	uint8_t* sig = sigbuf;
 
-	for (uint16_t p = sz;p<BOOTSTART-2-16;p++)
-		if (pgm_read_byte(p)!=0xff)
-			return 1;
+	if (ffcheck(sz))
+		return 1;
 
 	lenpadcbcmacaes(out, key, sz, &pgmreadbyte, 0);
 	for(int i=0; i<16; i++, sig++)
@@ -343,8 +350,8 @@ int main(void)
 					dest = SPM_PAGESIZE;
 				if (len > SPM_PAGESIZE - dest)
 					len = SPM_PAGESIZE - dest;
-				if (len > BOOTSTART - start)
-					len = BOOTSTART - start;
+				if (len > BOOTSTART-18 - start)//don't allow a copy to a place where we can read back (as length or sig).  that would allow arbitrary reading.
+					len = BOOTSTART-18 - start;
 				memcpy_P(progbuf+dest, (PGM_P)start, len);
 
 				goto shortreturnsend;
@@ -365,20 +372,15 @@ int main(void)
 			else if ('S' == rxBuffer[MRBUS_PKT_TYPE]) 
 			{
 				// Signature
-				txBuffer[MRBUS_PKT_LEN] = 20;
+				txBuffer[MRBUS_PKT_LEN] = 17;
 				txBuffer[MRBUS_PKT_TYPE] = 's';
-				txBuffer[6]  = sigcheck();
 				uint16_t sz = getsz();
+				txBuffer[6]  = (sigcheck()?0x80:0)|(ffcheck(sz)?0x01:0);//could be abused to check an arbitrary byte for FF, but seems ok enough.
 				txBuffer[7]  = sz;
 				txBuffer[8]  = sz>>8;
 				//called by sigcheck: loadsig();
 				uint8_t* p=sigbuf;
-				for(i=9; i<9+5; i++, p++)
-					txBuffer[i]  = *p;
-				uint8_t out[16];
-				uint8_t key[16]="MRBusBootLoader";
-				lenpadcbcmacaes(out, key, sz, &pgmreadbyte, 0);
-				for(p=out; i<20; i++, p++)
+				for(i=9; i<9+8; i++, p++)
 					txBuffer[i]  = *p;
 
 				goto returnsend;
