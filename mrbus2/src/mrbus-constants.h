@@ -24,6 +24,10 @@
 #define MRBUS_EE_DEVICE_UPDATE_H     2
 #define MRBUS_EE_DEVICE_UPDATE_L     3
 
+//MRB-CMP definitions
+#define MRBUS_CMP_TYPE 0xff
+#define MRBUS_CMP_REPLY_TYPE 0xfe
+
 // Version flags
 #define MRBUS_VERSION_WIRELESS 0x80
 #define MRBUS_VERSION_WIRED    0x00

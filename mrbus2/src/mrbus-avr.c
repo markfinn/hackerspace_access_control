@@ -398,6 +398,45 @@ PktReply:
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	} 
+#ifndef MRBUS_CMP_DISABLED
+	else if (MRBUS_CMP_TYPE == rxBuffer[MRBUS_PKT_TYPE])
+	{
+		//mrb-cmp (control message protocol.  like ICMP.  look it up.)		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		if (rxBuffer[MRBUS_PKT_LEN] < 7)
+			goto PktIgnore;
+		else if (rxBuffer[MRBUS_PKT_SUBTYPE] <= 1)
+		{
+			//capabilities
+		  txBuffer[MRBUS_PKT_SUBTYPE] = rxBuffer[MRBUS_PKT_SUBTYPE];
+		  txBuffer[7] = 0;//initial capabilites set is zero
+		  txBuffer[8] = 0;//initial capabilites set is zero
+			txBuffer[MRBUS_PKT_LEN]=9;
+		  if  (1 == rxBuffer[MRBUS_PKT_SUBTYPE])
+		  {
+		  	//includes hop counters
+				txBuffer[MRBUS_PKT_LEN]=11;
+				txBuffer[9] = (rxBuffer[MRBUS_PKT_LEN] > 7) ? rxBuffer[7] : 0;
+				txBuffer[10] = 0;
+			}
+		}
+		else if (rxBuffer[MRBUS_PKT_SUBTYPE] <= 3)
+		{
+			//max size
+		  txBuffer[MRBUS_PKT_SUBTYPE] = rxBuffer[MRBUS_PKT_SUBTYPE];
+		  txBuffer[7] = MRBUS_BUFFER_SIZE;
+		  txBuffer[8] = MRBUS_BUFFER_SIZE>>8;
+			txBuffer[MRBUS_PKT_LEN]=9;
+		}
+
+		txBuffer[MRBUS_PKT_TYPE] = MRBUS_CMP_REPLY_TYPE;
+		goto PktReply;
+	} 
+	else if (MRBUS_CMP_REPLY_TYPE == rxBuffer[MRBUS_PKT_TYPE])
+	{
+		//not done yet
+		goto	PktIgnore;
+	}
+#endif
 	//app should handle packet
 	return 1;	
 }
