@@ -31,7 +31,7 @@ LICENSE:
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
-
+#define MASTERKEY "yourkeygoeshere" //16 bytes
 aes128_ctx_t master_aes_ctx;
 
 #define DD_SS     PINB2
@@ -287,7 +287,7 @@ void init(void)
 	ADCSRA |= _BV(ADEN) | _BV(ADSC) | _BV(ADIE) | _BV(ADIF);
 */
 
-aes128_init("yourkeygoeshere", &master_aes_ctx);
+aes128_init(MASTERKEY, &master_aes_ctx);
 }
 
 #define MRBUS_TX_BUFFER_DEPTH 4
