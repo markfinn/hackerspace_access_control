@@ -89,6 +89,10 @@ if __name__ == '__main__':
 
   t=[1]
   node.sendpkt(['Z']+t)
+
+  print node.cmp.isSupported(timeout=200)
+
+
   print node.getpkt(timeout=5).data
   enc = AES.new(key, AES.MODE_CBC, strfrombytes([0]*16))
   print map(ord, enc.encrypt(strfrombytes(t + [0]*(16-len(t)))))
