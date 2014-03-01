@@ -76,17 +76,19 @@ BOOTSTART = 0x7000#0x3800#in words
 #FUSE_H  = 0xD5
 #FUSE_E  = 0x00
 
-BUSLOAD = python ../../mrbus_bootloader/load.py -p /dev/ttyUSB0 -a 0xfe -d 0x5c
 
 # MRBus
 DEFINES = -DMRBUS -DBOOTSTART=$(BOOTSTART)
+
 MRBPATH = ../mrbus2/src
-MRBOOTPATH = ../mrbus_bootloader
+MRBOOTPATH = ../../mrbus_bootloader
 SRCS = $(BASE_NAME).c $(MRBPATH)/mrbus-avr.c  $(MRBPATH)/mrbus-crc.c  $(MRBPATH)/mrbus-queue.c
 INCS =  $(MRBPATH)/mrbus.h  $(MRBPATH)/mrbus-avr.h $(MRBOOTPATH)/mrbus_bootloader_builtins.h
 
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) -B1
 AVRDUDE_SLOW = avrdude -c usbtiny -p $(DEVICE) -B32
+
+BUSLOAD = python $(MRBOOTPATH)/load.py -p /dev/ttyUSB0 -a 0xfe -d 0x5c
 
 OBJS = ${SRCS:.c=.o}
 INCLUDES = -I. -I $(MRBPATH) -I $(MRBOOTPATH)
