@@ -87,14 +87,15 @@ if __name__ == '__main__':
   node = mrb.getnode(args.addr)
 
 
-  t=[1]
-  node.sendpkt(['Z']+t)
 
   print node.cmp.isSupported(timeout=200)
 
-
-  print node.getpkt(timeout=5).data
+  t=[1]
   enc = AES.new(key, AES.MODE_CBC, strfrombytes([0]*16))
   print map(ord, enc.encrypt(strfrombytes(t + [0]*(16-len(t)))))
-  
+
+  node.pumpout()
+  node.sendpkt(['Z']+t)
+  #print node.getfilteredpkt(lambda p: p.cmd==ord('z')).data
+  print node.gettypefilteredpktdata('z')
 
