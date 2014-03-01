@@ -78,36 +78,13 @@ ISR(SPI_STC_vect)
 
 void PktHandler(void)
 {
-	uint16_t crc = 0;
 	uint8_t i;
 	uint8_t rxBuffer[MRBUS_BUFFER_SIZE];
 	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
-
-	if (0 == mrbusPktQueuePop(&mrbusRxQueue, rxBuffer, sizeof(rxBuffer)))
-		return;
-
-
-	//*************** PACKET FILTER ***************
-	// Loopback Test - did we send it?  If so, we probably want to ignore it
-	if (rxBuffer[MRBUS_PKT_SRC] == mrbus_dev_addr) 
-		goto	PktIgnore;
-
-	// Destination Test - is this for us or broadcast?  If not, ignore
-	if (0xFF != rxBuffer[MRBUS_PKT_DEST] && mrbus_dev_addr != rxBuffer[MRBUS_PKT_DEST]) 
-		goto	PktIgnore;
 	
-	// CRC16 Test - is the packet intact?
-	for(i=0; i<rxBuffer[MRBUS_PKT_LEN]; i++)
-	{
-		if ((i != MRBUS_PKT_CRC_H) && (i != MRBUS_PKT_CRC_L)) 
-			crc = mrbusCRC16Update(crc, rxBuffer[i]);
-	}
-	if ((UINT16_HIGH_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_H]) || (UINT16_LOW_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_L]))
-		goto	PktIgnore;
-		
-	//*************** END PACKET FILTER ***************
-
-
+	if (0 == mrbusPktHandlerStart(&mrbusRxQueue, rxBuffer, sizeof(rxBuffer), txBuffer, sizeof(txBuffer)))
+PktIgnore:
+		return;
 	//*************** PACKET HANDLER - PROCESS HERE ***************
 
 	// Just smash the transmit buffer if we happen to see a packet directed to us
@@ -122,17 +99,7 @@ void PktHandler(void)
 	// should be sent out of the main loop so that they don't step on things in
 	// the transmit buffer
 	
-	if ('A' == rxBuffer[MRBUS_PKT_TYPE])
-	{
-		// PING packet
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		txBuffer[MRBUS_PKT_LEN] = 6;
-		txBuffer[MRBUS_PKT_TYPE] = 'a';
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
-	} 
-	else if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
+	if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// EEPROM WRITE Packet
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
@@ -216,17 +183,6 @@ void PktHandler(void)
 	// to the device.
 
 	//*************** END PACKET HANDLER  ***************
-
-	
-	//*************** RECEIVE CLEANUP ***************
-PktIgnore:
-	// Yes, I hate gotos as well, but sometimes they're a really handy and efficient
-	// way to jump to a common block of cleanup code at the end of a function 
-
-	// This section resets anything that needs to be reset in order to allow us to receive
-	// another packet.  Typically, that's just clearing the MRBUS_RX_PKT_READY flag to 
-	// indicate to the core library that the mrbus_rx_buffer is clear.
-	return;	
 }
 
 void init(void)

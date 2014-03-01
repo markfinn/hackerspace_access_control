@@ -18,6 +18,8 @@ static uint8_t mrbusPriority;
 MRBusPktQueue mrbusRxQueue;
 MRBusPktQueue mrbusTxQueue;
 
+extern uint8_t mrbus_dev_addr;
+
 #if MR_BUS_WAIT_TYPE == 0
 #define mrbwaitsetup()
 #define mrbwait(x) _delay_us(20*(x))
@@ -356,4 +358,47 @@ uint8_t mrbusIsBusIdle()
 	return(MRBUS_ACTIVITY_IDLE == mrbusActivity);
 }
 
+uint8_t mrbusPktHandlerStart(MRBusPktQueue* mrbusRxQueue, uint8_t* rxBuffer, uint8_t rSize, uint8_t* txBuffer, uint8_t tSize)
+{
+	uint16_t crc = 0;
+	uint8_t i;
+
+	if (0 == mrbusPktQueuePop(mrbusRxQueue, rxBuffer, rSize))
+PktIgnore:
+		return 0;
+
+	//*************** PACKET FILTER ***************
+	// Loopback Test - did we send it?  If so, we probably want to ignore it
+	if (rxBuffer[MRBUS_PKT_SRC] == mrbus_dev_addr) 
+		goto	PktIgnore;
+
+	// Destination Test - is this for us or broadcast?  If not, ignore
+	if (0xFF != rxBuffer[MRBUS_PKT_DEST] && mrbus_dev_addr != rxBuffer[MRBUS_PKT_DEST]) 
+		goto	PktIgnore;
+	
+	// CRC16 Test - is the packet intact?
+	for(i=0; i<rxBuffer[MRBUS_PKT_LEN]; i++)
+	{
+		if ((i != MRBUS_PKT_CRC_H) && (i != MRBUS_PKT_CRC_L)) 
+			crc = mrbusCRC16Update(crc, rxBuffer[i]);
+	}
+	if ((UINT16_HIGH_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_H]) || (UINT16_LOW_BYTE(crc) != rxBuffer[MRBUS_PKT_CRC_L]))
+		goto	PktIgnore;
+	
+	if ('A' == rxBuffer[MRBUS_PKT_TYPE])
+	{
+		// PING packet
+		i = txBuffer[MRBUS_PKT_LEN] = rxBuffer[MRBUS_PKT_LEN];
+		txBuffer[MRBUS_PKT_TYPE] = 'a';
+		while(i-->0)
+			txBuffer[i] = rxBuffer[i];
+PktReply:
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
+	} 
+	//app should handle packet
+	return 1;	
+}
 
