@@ -164,17 +164,18 @@ PktIgnore:
 		// aes test
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		txBuffer[MRBUS_PKT_LEN] = 20;
 		txBuffer[MRBUS_PKT_TYPE] = 'z';
-    uint8_t l = min(14, rxBuffer[MRBUS_PKT_LEN]-6);
+		uint8_t l = min(16, rxBuffer[MRBUS_PKT_LEN]-6);
 		uint8_t buf[16];
 		for(i=0;i<l;i++)
 		  buf[i] = rxBuffer[6+i];
 		for(;i<16;i++)
 		  buf[i] = 0;
 		aes128_enc(buf, &master_aes_ctx);
-		for(i=0;i<14;i++)
-		  txBuffer[6+i] = buf[i];
+		l=min(MRBUS_BUFFER_SIZE, 16+6);
+		txBuffer[MRBUS_PKT_LEN] = l;
+		for(i=6;i<l;i++)
+		  txBuffer[i] = buf[i-6];
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
