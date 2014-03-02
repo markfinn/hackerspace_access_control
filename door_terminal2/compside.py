@@ -9,16 +9,9 @@ import mrbus
 
 
 def r(s):
-  o=''
-  for i in xrange(0, len(s), 2):
-    o+=chr(int(s[i:i+2],16))
-  return o
-
-def strfrombytes(b):
-  s=''
-  for bb in b:
-    s+=str(chr(bb))
-  return s
+  if s == '':
+    return 0
+  return int(s, 16)
 
 def intfromstr(s):
   i=0
@@ -26,100 +19,103 @@ def intfromstr(s):
     i=(i<<8)|ord(c)
   return i
 
+def strfromint(i, n):
+  s=''
+  while i:
+    s=chr(i&0xff)+s
+    i>>=8
+  assert len(s) <= n
+  return '\x00'*(n-len(s))+s
+
+def aead_eax_aes(K, N, n, H, h, M, m, t):
 
 
-def aead_eax_aes(K, N, H, M, t):
-  def cbc(K, M):
-    enc = AES.new(K, AES.MODE_CBC, strfrombytes([0]*16))
-    out = enc.encrypt(M)
-    return out[-16:]
+  def cbc(K, M, m):
+    enc = AES.new(strfromint(K, 16), AES.MODE_CBC, '\x00'*16)
+    out = enc.encrypt(strfromint(M, m))
+    return intfromstr(out[-16:])
 
-  def ctr(N, K, M):
-    ctr = Counter.new(128, initial_value=intfromstr(N))
-    enc = AES.new(K, AES.MODE_CTR, counter=ctr)
-    m = (len(M)+15)//16
+  def ctr(N, K, M, m):
+    ctr = Counter.new(128, initial_value=N)
+    enc = AES.new(strfromint(K, 16), AES.MODE_CTR, counter=ctr)
+    m2 = (m+15)//16
 
     S = ''
-    for i in xrange(m):
+    for i in xrange(m2):
       S += enc.encrypt(strfrombytes([0]*16))
+    S=intfromstr(S[:m])
 
-    C=''
-    for i in xrange(len(M)):
-      C += chr(ord(M[i])^ord(S[i]))
+    return m^S
 
-    return C
-
-  def pad(M, B, P):
-    if len(M) and len(M)%16 == 0:
+  def pad(M, m, B, P):
+    if m and m%16 == 0:
       x=B
     else:
       x=P
-      M=M+strfrombytes([0x80]+[0]*(15-len(M)%16))
-
-    C=M[:len(M)-len(x)]
-    M=M[len(M)-len(x):]
-    for i in xrange(len(M)):
-      C += chr(ord(M[i])^ord(x[i]))
-    return C
+      M=(M<<(8*(16-m%16))) | (0x80<<(8*(15-m%16)))
+    return M^x
 
   def L2(L):
-    carry=0
-    O=''
-    for i in xrange(len(L)-1, -1, -1):
-      x=(ord(L[i])<<1)|carry
-      carry=(x>>8)&1
-      O=chr(x&0xff)+O
-    if carry:
-      O=O[:-1]+chr(ord(O[-1])^0x87)
-    return O
+    L<<=1
+    if L&(1<<128):
+      L^=0x87
+    return L&((1<<128)-1)
 
-  def OMAC(K, M):#aka AES-CMAC
-    enc = AES.new(K, AES.MODE_ECB)
-    L = enc.encrypt(strfrombytes([0]*16))
+  def OMAC(K, M, m):#aka AES-CMAC
+    enc = AES.new(strfromint(K, 16), AES.MODE_ECB)
+    L = intfromstr(enc.encrypt('\x00'*16))
     B = L2(L)
     P = L2(B)
-    return cbc(K, pad(M, B, P))
+    return cbc(K, pad(M, m, B, P), 16*((m+15)//16) if m>0 else 16)
 
-  def OMACt(t, K, M):
-    return OMAC(K, strfrombytes([0]*15+[t])+M)
-
-#  print hex(intfromstr(L2(strfrombytes([0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]))))
+  def OMACt(t, K, M, m):
+    return OMAC(K, (t<<(8*m))|M, m+16)
 
 
 
-#  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
-#  MSG=r('6bc1bee22e409f96e93d7e117393172a')
-#  tag=r('070a16b46b4d4144f79bdd9dd04a287c')
-#  assert OMAC(KEY, MSG) == tag
-
-#  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
-#  MSG=r('')
-#  tag=r('bb1d6929e95937287fa37d129b756746')
-#  assert OMAC(KEY, MSG) == tag
-
-#  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
-#  MSG=r('6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411')
-#  tag=r('dfa66747de9ae63030ca32611497c827')
-#  assert OMAC(KEY, MSG) == tag
-
-#  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
-#  MSG=r('6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710')
-#  tag=r('51f0bebf7e3b9d92fc49741779363cfe')
-#  assert OMAC(KEY, MSG) == tag
-
-#  sys.exit(0)
+  assert L2(0x80) == 0x100
+  assert L2(0x0) == 0x0
+  assert L2(0x80<<(8*15)) == 0x87
+  assert L2(0x41<<(8*15)) == (0x82<<(8*15))
+  assert L2(0x81<<(8*15)) == (0x2<<(8*15))|0x87
 
 
-  Nx = OMACt(0, K, N)
-  Hx = OMACt(1, K, H)
-  C = ctr(Nx, K, M)
-  Cx = OMACt(2, K, C)
-  TAG = ''
-  for i in xrange(len(Nx)):
-    TAG += chr(ord(Nx[i])^ord(Cx[i])^ord(Hx[i]))
-  T = TAG[:t]
 
-  return C+T
+  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
+  MSG=r('6bc1bee22e409f96e93d7e117393172a')
+  tag=r('070a16b46b4d4144f79bdd9dd04a287c')
+  assert OMAC(KEY, MSG, 16) == tag
+
+  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
+  MSG=r('')
+  tag=r('bb1d6929e95937287fa37d129b756746')
+  assert OMAC(KEY, MSG, 0) == tag
+
+  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
+  MSG=r('6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411')
+  tag=r('dfa66747de9ae63030ca32611497c827')
+  assert OMAC(KEY, MSG, 40) == tag
+
+  KEY=r('2b7e151628aed2a6abf7158809cf4f3c')
+  MSG=r('6bc1bee22e409f96e93d7e117393172aae2d8a571e03ac9c9eb76fac45af8e5130c81c46a35ce411e5fbc1191a0a52eff69f2445df4f9b17ad2b417be66c3710')
+  tag=r('51f0bebf7e3b9d92fc49741779363cfe')
+  assert OMAC(KEY, MSG, 64) == tag
+
+  sys.exit(0)
+
+
+  Nx = OMACt(0, K, N, n)
+  Hx = OMACt(1, K, H, h)
+  C = ctr(Nx, K, M, m)
+  Cx = OMACt(2, K, C, 16)
+  TAG = Nx^Cx^Hx
+  T = TAG>>(8*(16-t))
+
+  return C<<(8*t)|T
+
+
+
+
 
   
 def sign(m, key):
@@ -166,21 +162,23 @@ if __name__ == '__main__':
   NONCE=r('62EC67F9C3A4A407FCB2A8C49031A8B3')
   HEADER=r('6BFB914FD07EAE6B')
   CIPHER=r('E037830E8389F27B025A2D6527E79D01')
-  assert aead_eax_aes(KEY, NONCE, HEADER, MSG, 16) == CIPHER
+  print hex(aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 0, 16))
+  print hex(CIPHER)
+  assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 0, 16) == CIPHER
 
   MSG=r('F7FB')
   KEY=r('91945D3F4DCBEE0BF45EF52255F095A4')
   NONCE=r('BECAF043B0A23D843194BA972C66DEBD')
   HEADER=r('FA3BFD4806EB53FA')
   CIPHER=r('19DD5C4C9331049D0BDAB0277408F67967E5')
-  assert aead_eax_aes(KEY, NONCE, HEADER, MSG, 16) == CIPHER
+  assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 2, 16) == CIPHER
 
   MSG=r('CA40D7446E545FFAED3BD12A740A659FFBBB3CEAB7')
   KEY=r('8395FCF1E95BEBD697BD010BC766AAC3')
   NONCE=r('22E7ADD93CFC6393C57EC0B3C17D6B44')
   HEADER=r('126735FCC320D25A')
   CIPHER=r('CB8920F87A6C75CFF39627B56E3ED197C552D295A7CFC46AFC253B4652B1AF3795B124AB6E')
-  assert aead_eax_aes(KEY, NONCE, HEADER, MSG, 16) == CIPHER
+  assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 21, 16) == CIPHER
 
 
   sys.exit(0)
