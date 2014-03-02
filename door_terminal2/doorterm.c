@@ -29,7 +29,7 @@ LICENSE:
 #include "mrbus.h"
 #include "mrbus_bootloader_builtins.h"
 
-#include "cmac_aes.h"
+#include "eax_aes.h"
 
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
@@ -164,21 +164,6 @@ PktIgnore:
 		while(1);  // Force a watchdog reset
 		sei();
 	}
-	else if ('1' == rxBuffer[MRBUS_PKT_TYPE]) 
-	{
-		// omac test
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		txBuffer[MRBUS_PKT_TYPE] = '2';
-		txBuffer[MRBUS_PKT_LEN] = 20;
-		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
-		uint8_t buf[16];
-		cmac_aes(&master_cmac_ctx, buf, rxBuffer+MRBUS_PKT_TYPE+1, l);
-		for(i=0;i<14;i++)
-		  txBuffer[i+6] = buf[i];
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
-	}
 	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// aes test
@@ -196,6 +181,38 @@ PktIgnore:
 		txBuffer[MRBUS_PKT_LEN] = l;
 		for(i=6;i<l;i++)
 		  txBuffer[i] = buf[i-6];
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
+	}
+	else if ('1' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// omac test
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		txBuffer[MRBUS_PKT_TYPE] = '2';
+		txBuffer[MRBUS_PKT_LEN] = 20;
+		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
+		uint8_t buf[16];
+		cmac_aes(&master_cmac_ctx, buf, rxBuffer+MRBUS_PKT_TYPE+1, l);
+		for(i=0;i<14;i++)
+		  txBuffer[i+6] = buf[i];
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
+	}
+	else if ('3' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// eax test
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		txBuffer[MRBUS_PKT_TYPE] = '4';
+		uint8_t nl = rxBuffer[6];
+		uint8_t hl = (nl>>4)&0xf;
+		nl&=0xf;
+		uint8_t dl=rxBuffer[MRBUS_PKT_LEN]-7-nl-hl;
+		if (dl+3>14)
+			dl=14-3;
+		eax_aes_enc(&master_cmac_ctx, txBuffer+6, 3, rxBuffer+7, nl, rxBuffer+7+nl, hl, rxBuffer+7+nl+hl, dl);
+		txBuffer[MRBUS_PKT_LEN] = 6+dl+3;
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}

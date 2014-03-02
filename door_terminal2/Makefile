@@ -82,8 +82,8 @@ DEFINES = -DMRBUS -DBOOTSTART=$(BOOTSTART)
 
 MRBPATH = ../mrbus2/src
 MRBOOTPATH = ../../mrbus_bootloader
-SRCS = $(BASE_NAME).c $(MRBPATH)/mrbus-avr.c  $(MRBPATH)/mrbus-crc.c  $(MRBPATH)/mrbus-queue.c cmac_aes.c
-INCS =  $(MRBPATH)/mrbus.h  $(MRBPATH)/mrbus-avr.h $(MRBOOTPATH)/mrbus_bootloader_builtins.h cmac_aes.h
+SRCS = $(BASE_NAME).c $(MRBPATH)/mrbus-avr.c  $(MRBPATH)/mrbus-crc.c  $(MRBPATH)/mrbus-queue.c cmac_aes.c eax_aes.c
+INCS =  $(MRBPATH)/mrbus.h  $(MRBPATH)/mrbus-avr.h $(MRBOOTPATH)/mrbus_bootloader_builtins.h cmac_aes.h eax_aes.h
 
 AVRDUDE = avrdude -c usbtiny -p $(DEVICE) -B1
 AVRDUDE_SLOW = avrdude -c usbtiny -p $(DEVICE) -B32

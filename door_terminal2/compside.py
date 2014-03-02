@@ -74,8 +74,12 @@ if __name__ == '__main__':
 
 
 
-  print node.cmp.isSupported(timeout=200)
+#  print node.cmp.isSupported(timeout=200)
 
+
+
+#############################
+#AES TEST
 #  t=[1]
 #  enc = AES.new(key, AES.MODE_CBC, '\x00'*16)
 #  print map(ord, enc.encrypt(strfrombytes(t + [0]*(16-len(t)))))
@@ -84,16 +88,41 @@ if __name__ == '__main__':
 #  node.sendpkt(['Z']+t)
 #  #print node.getfilteredpkt(lambda p: p.cmd==ord('z')).data
 #  print node.gettypefilteredpktdata('z')
+#############################
 
 
-  t=283945720348972302934857
-  tag = aes_eax.OMAC(aes_eax.intfromstr(key), t, 14)
-  print hex(tag)
+#############################
+#CMAC TEST
+#  t=283945720348972302934857
+#  tag = aes_eax.OMAC(aes_eax.intfromstr(key), t, 14)
+#  print hex(tag)
+
+#  node.pumpout()
+#  node.sendpkt(['1']+[s for s in aes_eax.strfromint(t,14)])
+#  r = node.gettypefilteredpktdata('2')
+#  print map(hex, r)
+#############################
+
+
+#############################
+#EAX TEST
+
+  nonce=[1]
+  nl=len(nonce)
+  head=[1,2]
+  hl=len(head)
+  data=[2,3,4]
+  dl=len(data)
+
+  assert nl<16 and hl < 16 and dl < 16 and nl+hl+dl <= 13
 
   node.pumpout()
-  node.sendpkt(['1']+[s for s in aes_eax.strfromint(t,14)])
-  r = node.gettypefilteredpktdata('2')
+  node.sendpkt(['3']+[(hl<<4)|nl]+nonce+head+data)
+  r = node.gettypefilteredpktdata('4')
   print map(hex, r)
+#############################
+
+
 
 
 
