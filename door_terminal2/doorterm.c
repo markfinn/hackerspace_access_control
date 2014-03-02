@@ -32,8 +32,15 @@ LICENSE:
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
+typedef struct{
+	aes128_ctx_t* key_ctx;
+	uint8_t k1[16];
+	uint8_t k2[16];
+} cmac_aes_ctx_t;
+
 #define MASTERKEY "yourkeygoeshere" //16 bytes
 aes128_ctx_t master_aes_ctx;
+cmac_aes_ctx_t master_cmac_ctx;
 
 #define DD_SS     PINB2
 #define DD_MOSI     PINB3
@@ -108,17 +115,19 @@ asm ("ld __tmp_reg__, %0\n\t"
 }
 
 
-void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint8_t *data, uint16_t sz)
+void cmac_aes_init(aes128_ctx_t* key_ctx, cmac_aes_ctx_t* cmac_ctx)
 {
-	uint8_t k1[16];
-	uint8_t k2[16];
+	cmac_ctx->key_ctx = key_ctx;
+	memset(cmac_ctx->k2, 0, 16);
+	aes128_enc(cmac_ctx->k2, cmac_ctx->key_ctx);
+  cmac_double(cmac_ctx->k1, cmac_ctx->k2);
+  cmac_double(cmac_ctx->k2, cmac_ctx->k1);
+}
+
+void  cmac_aes(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t sz)
+{
 	uint8_t *x;
 	
-	memset(k2, 0, 16);
-	aes128_enc(k2, key_ctx);
-  cmac_double(k1, k2);
-  cmac_double(k2, k1);
-
 	memset(out, 0, 16);
 	uint16_t blocks = (sz+15)/16;
 	if (blocks==0)
@@ -129,20 +138,20 @@ void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint8_t *data, uint16_t sz)
 	{
 		for(i=0;i<16;i++, data++)
 			out[i]^=*data;
-		aes128_enc(out, key_ctx);
+		aes128_enc(out, cmac_ctx->key_ctx);
 	}
 	for(i=0;i<sz;i++, data++)
 		out[i]^=*data;
 	if(i<16)
 	{
-		x = k2;
+		x = cmac_ctx->k2;
 		out[i]^=0x80;
 	}
 	else
-		x = k1;
+		x = cmac_ctx->k1;
 	for(i=0;i<16;i++)
 		out[i]^=x[i];
-	aes128_enc(out, key_ctx);
+	aes128_enc(out, cmac_ctx->key_ctx);
 }
 
 
@@ -238,7 +247,7 @@ PktIgnore:
 		txBuffer[MRBUS_PKT_LEN] = 20;
 		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
 		uint8_t buf[16];
-		cmac_aes(buf, &master_aes_ctx, rxBuffer+MRBUS_PKT_TYPE+1, l);
+		cmac_aes(&master_cmac_ctx, buf, rxBuffer+MRBUS_PKT_TYPE+1, l);
 		for(i=0;i<14;i++)
 		  txBuffer[i+6] = buf[i];
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
@@ -330,6 +339,7 @@ void init(void)
 */
 
 aes128_init(MASTERKEY, &master_aes_ctx);
+cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
 }
 
 #define MRBUS_TX_BUFFER_DEPTH 4
