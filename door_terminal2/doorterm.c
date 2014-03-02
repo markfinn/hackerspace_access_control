@@ -76,11 +76,6 @@ ISR(SPI_STC_vect)
 
 }
 
-uint8_t datareadbyte(uint16_t addr)
-{
-	return *(uint8_t*)addr;
-}
-
 void cmac_double(uint8_t* dest, uint8_t* src)
 {
 	uint8_t i; 
@@ -92,10 +87,7 @@ void cmac_double(uint8_t* dest, uint8_t* src)
 		dest[15]^=0x87;
 
 
-//	asm volatile ("rol %0" : "=r" (example) : "0" (example));
-//asm volatile ("lsl %0\n\t"             "adc %0, __zero_reg__\n\t" : "=r" (example) : "0" (example));
-
-/*
+/* work in progress, don't really know avr asm.
 asm ("ld __tmp_reg__, %0\n\t"
 "lsl __tmp_reg__\n\t" 
 "st %0+, __tmp_reg__\n\t"
@@ -116,7 +108,7 @@ asm ("ld __tmp_reg__, %0\n\t"
 }
 
 
-void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint16_t sz, uint8_t (*dataget)(uint16_t), uint16_t offset)
+void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint8_t *data, uint16_t sz)
 {
 	uint8_t k1[16];
 	uint8_t k2[16];
@@ -135,13 +127,12 @@ void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint16_t sz, uint8_t (*datag
 	int i;
 	while (--blocks > 0)
 	{
-		for(i=0;i<16;i++)
-			out[i]^=dataget(i+offset);
-		offset += 16;
+		for(i=0;i<16;i++, data++)
+			out[i]^=*data;
 		aes128_enc(out, key_ctx);
 	}
-	for(i=0;i<sz;i++)
-		out[i]^=dataget(i+offset);
+	for(i=0;i<sz;i++, data++)
+		out[i]^=*data;
 	if(i<16)
 	{
 		x = k2;
@@ -247,7 +238,7 @@ PktIgnore:
 		txBuffer[MRBUS_PKT_LEN] = 20;
 		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
 		uint8_t buf[16];
-		cmac_aes(buf, &master_aes_ctx, l, &datareadbyte, (rxBuffer+MRBUS_PKT_TYPE+1)-(uint8_t*)0);
+		cmac_aes(buf, &master_aes_ctx, rxBuffer+MRBUS_PKT_TYPE+1, l);
 		for(i=0;i<14;i++)
 		  txBuffer[i+6] = buf[i];
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
