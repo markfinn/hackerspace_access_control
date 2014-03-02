@@ -32,7 +32,7 @@ def ctr(N, K, M, m):
     S += enc.encrypt('\x00'*16)
   S=intfromstr(S[:m])
 
-  return m^S
+  return M^S
 
 def pad(M, m, B, P):
   if m and m%16 == 0:
@@ -60,11 +60,17 @@ def OMACt(t, K, M, m):
 
 
 def aead_eax_aes(K, N, n, H, h, M, m, t):
+  #print 'eax:', hex(K), hex(N), n, hex(H), h, hex(M), m, t
   Nx = OMACt(0, K, N, n)
+  #print 'Nx:', hex(Nx)
   Hx = OMACt(1, K, H, h)
+  #print 'Hx:', hex(Hx)
   C = ctr(Nx, K, M, m)
-  Cx = OMACt(2, K, C, 16)
+  #print 'C:', hex(C)
+  Cx = OMACt(2, K, C, m)
+  #print 'Cx:', hex(Cx)
   TAG = Nx^Cx^Hx
+  #print 'TAG:', hex(TAG)
   T = TAG>>(8*(16-t))
   return C<<(8*t)|T
 
@@ -125,7 +131,5 @@ if __name__ == '__main__':
   CIPHER=r('CB8920F87A6C75CFF39627B56E3ED197C552D295A7CFC46AFC253B4652B1AF3795B124AB6E')
   assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 21, 16) == CIPHER
 
-
-  sys.exit(0)
 
 
