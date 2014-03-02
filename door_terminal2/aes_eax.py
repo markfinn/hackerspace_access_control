@@ -48,7 +48,7 @@ def L2(L):
     L^=0x87
   return L&((1<<128)-1)
 
-def OMAC(K, M, m):#aka AES-CMAC
+def OMAC(K, M, m):#aka AES-CMAC aka OMAC1
   enc = AES.new(strfromint(K, 16), AES.MODE_ECB)
   L = intfromstr(enc.encrypt('\x00'*16))
   B = L2(L)
@@ -73,6 +73,29 @@ def aead_eax_aes(K, N, n, H, h, M, m, t):
   #print 'TAG:', hex(TAG)
   T = TAG>>(8*(16-t))
   return C<<(8*t)|T
+
+
+def aead_eax_aes_dec(K, N, n, H, h, C, c, t):
+  if c<t:
+    return None
+
+  #split
+  T=C&((1<<(8*t))-1)
+  C=C>>(8*t)
+  c-=t
+	
+  Nx = OMACt(0, K, N, n)
+  Hx = OMACt(1, K, H, h)
+  Cx = OMACt(2, K, C, c)
+  TAGx = Nx^Cx^Hx
+  Tx = TAGx>>(8*(16-t))
+
+  if T != Tx:
+    return None
+
+  M = ctr(Nx, K, C, c)
+  return M
+
 
 
 if __name__ == '__main__':
@@ -116,6 +139,7 @@ if __name__ == '__main__':
   HEADER=r('6BFB914FD07EAE6B')
   CIPHER=r('E037830E8389F27B025A2D6527E79D01')
   assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 0, 16) == CIPHER
+  assert aead_eax_aes_dec(KEY, NONCE, 16, HEADER, 8, CIPHER, 16, 16) == MSG
 
   MSG=r('F7FB')
   KEY=r('91945D3F4DCBEE0BF45EF52255F095A4')
@@ -123,6 +147,7 @@ if __name__ == '__main__':
   HEADER=r('FA3BFD4806EB53FA')
   CIPHER=r('19DD5C4C9331049D0BDAB0277408F67967E5')
   assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 2, 16) == CIPHER
+  assert aead_eax_aes_dec(KEY, NONCE, 16, HEADER, 8, CIPHER, 18, 16) == MSG
 
   MSG=r('CA40D7446E545FFAED3BD12A740A659FFBBB3CEAB7')
   KEY=r('8395FCF1E95BEBD697BD010BC766AAC3')
@@ -130,6 +155,9 @@ if __name__ == '__main__':
   HEADER=r('126735FCC320D25A')
   CIPHER=r('CB8920F87A6C75CFF39627B56E3ED197C552D295A7CFC46AFC253B4652B1AF3795B124AB6E')
   assert aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 21, 16) == CIPHER
+  assert aead_eax_aes_dec(KEY, NONCE, 16, HEADER, 8, CIPHER, 37, 16) == MSG
 
+  #check a shorter tag too
+  assert aead_eax_aes_dec(KEY, NONCE, 16, HEADER, 8, aead_eax_aes(KEY, NONCE, 16, HEADER, 8, MSG, 21, 7), 28, 7) == MSG
 
 
