@@ -9,6 +9,13 @@ def intfromstr(s):
     i=(i<<8)|ord(c)
   return i
 
+def intfrombytes(l):
+  i=0
+  for c in l:
+    i=(i<<8)|c
+  return i
+
+
 def strfromint(i, n):
   s=''
   while i:

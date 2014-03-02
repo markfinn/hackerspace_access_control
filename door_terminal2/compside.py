@@ -105,7 +105,7 @@ if __name__ == '__main__':
 
 
 #############################
-#EAX TEST
+#EAX enc TEST
 
   nonce=[1]
   nl=len(nonce)
@@ -116,10 +116,17 @@ if __name__ == '__main__':
 
   assert nl<16 and hl < 16 and dl < 16 and nl+hl+dl <= 13
 
+  print hex(aes_eax.intfrombytes(data))
+
   node.pumpout()
   node.sendpkt(['3']+[(hl<<4)|nl]+nonce+head+data)
   r = node.gettypefilteredpktdata('4')
   print map(hex, r)
+  print hex(aes_eax.aead_eax_aes_dec(aes_eax.intfromstr(key), aes_eax.intfrombytes(nonce), nl, aes_eax.intfrombytes(head), hl, aes_eax.intfrombytes(r), len(r), 3))
+
+
+
+
 #############################
 
 
