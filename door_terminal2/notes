@@ -1,0 +1,21 @@
+new std pkt 0xff that is a mrb-cmp pkt.  first subtype is "give max len." nodes that pass this may modify it if certain bit is set
+multiple binary-searching pings are used to verify the value from above in case transit nodes don't understand the mrb-cmp-len pkt
+
+other new mrb-cmp:
+give mrb-cmp capabilites, no modify by interveining routers
+give mrb-cmp capabilites, DO modify return ptk by interveining routers, and add to the two hop-counts on both dirs.
+
+
+
+reliable datagram:
+pkt type [0x80 to 0x80+32)
+pktType = inputType&0x1f
+seqNum = pktType&0x7
+dgramType_isControlpkt = 1;
+dgramType_isAck = 2;
+dgramType_isNak = 4;
+dgramType_isData = 8;
+dgramType=1<<(pktType>>3);
+
+
+
