@@ -76,12 +76,24 @@ if __name__ == '__main__':
 
   print node.cmp.isSupported(timeout=200)
 
-  t=[1]
-  enc = AES.new(key, AES.MODE_CBC, '\x00'*16)
-  print map(ord, enc.encrypt(strfrombytes(t + [0]*(16-len(t)))))
+#  t=[1]
+#  enc = AES.new(key, AES.MODE_CBC, '\x00'*16)
+#  print map(ord, enc.encrypt(strfrombytes(t + [0]*(16-len(t)))))
+
+#  node.pumpout()
+#  node.sendpkt(['Z']+t)
+#  #print node.getfilteredpkt(lambda p: p.cmd==ord('z')).data
+#  print node.gettypefilteredpktdata('z')
+
+
+  t=283945720348972302934857
+  tag = aes_eax.OMAC(aes_eax.intfromstr(key), t, 14)
+  print hex(tag)
 
   node.pumpout()
-  node.sendpkt(['Z']+t)
-  #print node.getfilteredpkt(lambda p: p.cmd==ord('z')).data
-  print node.gettypefilteredpktdata('z')
+  node.sendpkt(['1']+[s for s in aes_eax.strfromint(t,14)])
+  r = node.gettypefilteredpktdata('2')
+  print map(hex, r)
+
+
 

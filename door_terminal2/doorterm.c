@@ -24,6 +24,7 @@ LICENSE:
 #include <avr/eeprom.h>
 #include <avr/wdt.h>
 #include <util/delay.h>
+#include <string.h>
 
 #include "mrbus.h"
 #include "mrbus_bootloader_builtins.h"
@@ -73,6 +74,84 @@ ISR(SPI_STC_vect)
 {
 
 
+}
+
+uint8_t datareadbyte(uint16_t addr)
+{
+	return *(uint8_t*)addr;
+}
+
+void cmac_double(uint8_t* dest, uint8_t* src)
+{
+	uint8_t i; 
+
+	for (i=0;i<15;i++)
+		dest[i] = (src[i]<<1)|(src[i+1]>>7);
+	dest[15] = src[15]<<1;
+	if(src[0]&0x80)
+		dest[15]^=0x87;
+
+
+//	asm volatile ("rol %0" : "=r" (example) : "0" (example));
+//asm volatile ("lsl %0\n\t"             "adc %0, __zero_reg__\n\t" : "=r" (example) : "0" (example));
+
+/*
+asm ("ld __tmp_reg__, %0\n\t"
+"lsl __tmp_reg__\n\t" 
+"st %0+, __tmp_reg__\n\t"
+
+"ld __tmp_reg__, %0\n\t"
+"rol __tmp_reg__\n\t" 
+"st %0+, __tmp_reg__\n\t"
+
+"ld __tmp_reg__, %0\n\t"
+"rol __tmp_reg__\n\t" 
+"st %0+, __tmp_reg__\n\t"
+
+"ld __tmp_reg__, %0\n\t"
+"rol __tmp_reg__\n\t" 
+"st %0+, __tmp_reg__\n\t"
+: "=e" (b) ::);
+*/
+}
+
+
+void  cmac_aes(uint8_t *out, aes128_ctx_t* key_ctx, uint16_t sz, uint8_t (*dataget)(uint16_t), uint16_t offset)
+{
+	uint8_t k1[16];
+	uint8_t k2[16];
+	uint8_t *x;
+	
+	memset(k2, 0, 16);
+	aes128_enc(k2, key_ctx);
+  cmac_double(k1, k2);
+  cmac_double(k2, k1);
+
+	memset(out, 0, 16);
+	uint16_t blocks = (sz+15)/16;
+	if (blocks==0)
+	  blocks=1;
+	sz -= (blocks-1)*16;
+	int i;
+	while (--blocks > 0)
+	{
+		for(i=0;i<16;i++)
+			out[i]^=dataget(i+offset);
+		offset += 16;
+		aes128_enc(out, key_ctx);
+	}
+	for(i=0;i<sz;i++)
+		out[i]^=dataget(i+offset);
+	if(i<16)
+	{
+		x = k2;
+		out[i]^=0x80;
+	}
+	else
+		x = k1;
+	for(i=0;i<16;i++)
+		out[i]^=x[i];
+	aes128_enc(out, key_ctx);
 }
 
 
@@ -158,6 +237,21 @@ PktIgnore:
 		WDTCSR = _BV(WDE);
 		while(1);  // Force a watchdog reset
 		sei();
+	}
+	else if ('1' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// omac test
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		txBuffer[MRBUS_PKT_TYPE] = '2';
+		txBuffer[MRBUS_PKT_LEN] = 20;
+		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
+		uint8_t buf[16];
+		cmac_aes(buf, &master_aes_ctx, l, &datareadbyte, (rxBuffer+MRBUS_PKT_TYPE+1)-(uint8_t*)0);
+		for(i=0;i<14;i++)
+		  txBuffer[i+6] = buf[i];
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
 	}
 	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
