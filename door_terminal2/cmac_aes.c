@@ -43,16 +43,16 @@ void cmac_aes_init(aes128_ctx_t* key_ctx, cmac_aes_ctx_t* cmac_ctx)
   cmac_double(cmac_ctx->k2, cmac_ctx->k1);
 }
 
-void  cmac_aes(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t sz)
+void  cmac_aes_noclear(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t sz)
 {
 	uint8_t *x;
-	
-	memset(out, 0, 16);
+	int i;
 	uint16_t blocks = (sz+15)/16;
+
 	if (blocks==0)
 	  blocks=1;
 	sz -= (blocks-1)*16;
-	int i;
+
 	while (--blocks > 0)
 	{
 		for(i=0;i<16;i++, data++)
@@ -73,4 +73,9 @@ void  cmac_aes(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t s
 	aes128_enc(out, cmac_ctx->key_ctx);
 }
 
+void  cmac_aes(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t sz)
+{
+	memset(out, 0, 16);
+	cmac_aes_noclear(cmac_ctx, out, data, sz);
+}
 
