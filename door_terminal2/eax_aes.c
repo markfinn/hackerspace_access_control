@@ -15,6 +15,8 @@ static void omact(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t t, uint8_t *da
 
 static void ctr_aes(aes128_ctx_t *aes_ctx, uint8_t*nOnce, uint8_t *out, uint8_t *data, uint16_t dataSz)
 {
+//can be used in place. (out==data)
+//modifies nOnce
 	uint8_t tmp[16];
 
 	for(int i=0; i<dataSz; i++)
@@ -34,6 +36,8 @@ static void ctr_aes(aes128_ctx_t *aes_ctx, uint8_t*nOnce, uint8_t *out, uint8_t 
 
 void eax_aes_enc(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t tagSz, uint8_t *nonce, uint8_t nonceSz, uint8_t * hData, uint16_t hDataSz, uint8_t *data, uint16_t dataSz)
 {
+//out must be dataSz + tagSz long.
+//can be used in place. (out==data)
 	uint8_t tmp[16];
 	
 	omact(cmac_ctx, tmp, 0, nonce, nonceSz);
@@ -49,43 +53,38 @@ void eax_aes_enc(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t tagSz, uint8_t 
 	for(int i=0;i<tagSz;i++)
 		out[i] ^= tmp[i];
 }
-/*
-def aead_eax_aes(K, N, n, H, h, M, m, t):
-  #print 'eax:', hex(K), hex(N), n, hex(H), h, hex(M), m, t
-  Nx = OMACt(0, K, N, n)
-  #print 'Nx:', hex(Nx)
-  Hx = OMACt(1, K, H, h)
-  #print 'Hx:', hex(Hx)
-  C = ctr(Nx, K, M, m)
-  #print 'C:', hex(C)
-  Cx = OMACt(2, K, C, m)
-  #print 'Cx:', hex(Cx)
-  TAG = Nx^Cx^Hx
-  #print 'TAG:', hex(TAG)
-  T = TAG>>(8*(16-t))
-  return C<<(8*t)|T
 
+uint8_t eax_aes_dec(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t tagSz, uint8_t *nonce, uint8_t nonceSz, uint8_t * hData, uint16_t hDataSz, uint8_t *cipher, uint16_t cipherSz)
+{
+//out must be dataSz long, which is equivalent to cipherSz - tagSz.
+//can be used in place. (out==cipher)
+//returns a VALID flag
+//only writes to output if it is a valid message
+  if (cipherSz < tagSz)
+    return 0;
 
-def aead_eax_aes_dec(K, N, n, H, h, C, c, t):
-  if c<t:
-    return None
+  //split the ciphertext into Cipher and Tag
+	cipherSz -= tagSz;
+	uint8_t tag[16];
+	memcpy(tag, cipher+cipherSz, tagSz);
 
-  #split
-  T=C&((1<<(8*t))-1)
-  C=C>>(8*t)
-  c-=t
-	
-  Nx = OMACt(0, K, N, n)
-  Hx = OMACt(1, K, H, h)
-  Cx = OMACt(2, K, C, c)
-  TAGx = Nx^Cx^Hx
-  Tx = TAGx>>(8*(16-t))
+	uint8_t tmp[16];
+	omact(cmac_ctx, tmp, 2, cipher, cipherSz);
+	for(int i=0;i<tagSz;i++)
+		tag[i] ^= tmp[i];
 
-  if T != Tx:
-    return None
+	omact(cmac_ctx, tmp, 1, hData, hDataSz);
+	for(int i=0;i<tagSz;i++)
+		tag[i] ^= tmp[i];
 
-  M = ctr(Nx, K, C, c)
-  return M
+	omact(cmac_ctx, tmp, 0, nonce, nonceSz);
+	for(int i=0;i<tagSz;i++)
+	{
+		if((tag[i] ^ tmp[i]))
+			return 0;
+	}
 
+  ctr_aes(cmac_ctx->key_ctx, tmp, out, cipher, cipherSz);
+	return 1;
+}
 
-*/
