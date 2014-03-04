@@ -19,3 +19,6 @@ dgramType=1<<(pktType>>3);
 
 
 
+
+based on http://tools.ietf.org/html/rfc908 reliable datagram protocol
+and http://tools.ietf.org/html/rfc6347 datagram transport layer security

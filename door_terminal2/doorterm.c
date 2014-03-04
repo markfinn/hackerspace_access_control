@@ -34,9 +34,19 @@ LICENSE:
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
+#define EE_MASTER_SALT 4
+
+
 #define MASTERKEY "yourkeygoeshere" //16 bytes
-aes128_ctx_t master_aes_ctx;
-cmac_aes_ctx_t master_cmac_ctx;
+aes128_ctx_t master_aes_ctx;//maybe not used outside of cmacctx. drop as global?
+cmac_aes_ctx_t master_cmac_ctx;//maybe not needed on master after testing
+uint32_t master_key_salt;
+
+aes128_ctx_t client_aes_ctx;//maybe not used outside of cmacctx. drop as global?
+cmac_aes_ctx_t client_cmac_ctx;
+uint8_t client_eax_nonce[6];
+uint16_t clientPktCounter;
+
 
 #define DD_SS     PINB2
 #define DD_MOSI     PINB3
@@ -216,12 +226,56 @@ PktIgnore:
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
+	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] < -96) 
+	{
+		//secure channel packet
+		uint8_t pktType = rxBuffer[MRBUS_PKT_TYPE]&0x1F;
+		int8_t seqNum = pktType&7;
+		pktType >>= 3;
+		uint16_t pktNum = ;//some magic here from clientPktCounter and seqNum; 
+		//verify pkt and decrypt
+		uint8_t hbuf[4];
+		hbuf[0] = rxBuffer[MRBUS_PKT_DEST];
+		hbuf[1] = rxBuffer[MRBUS_PKT_SRC];
+		hbuf[2] = rxBuffer[MRBUS_PKT_LEN];
+		hbuf[3] = rxBuffer[MRBUS_PKT_TYPE];
+		*(uint16_t*)(client_eax_nonce+4) = pktNum;
+		if(0 == eax_aes_dec(&client_cmac_ctx, rxBuffer+6, 4, client_eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
+			goto PktIgnore;
+
+
+	
+	
+	
+	}
 
 	// FIXME:  Insert code here to handle incoming packets specific
 	// to the device.
 
 	//*************** END PACKET HANDLER  ***************
 }
+
+void keySetup(){
+//worst key derivation function eva!!!
+//replace later
+	uint8_t buf[16];
+
+	memset(buf+4, 0, 16-4-1);
+	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
+  buf[15] = 1;
+	aes128_enc(buf, &master_aes_ctx);
+	aes128_init(buf, &client_aes_ctx);
+	cmac_aes_init(&client_aes_ctx, &client_cmac_ctx);
+
+	memset(buf+4, 0, 16-4-1);
+	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
+  buf[15] = 2;
+	aes128_enc(buf, &master_aes_ctx);
+	memcpy(&client_eax_nonce, buf, 4);
+	
+	clientPktCounter=0;
+}
+
 
 void init(void)
 {
@@ -283,6 +337,9 @@ void init(void)
 
 aes128_init(MASTERKEY, &master_aes_ctx);
 cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
+master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword((const uint32_t*)EE_MASTER_SALT);
+
+keySetup();
 }
 
 #define MRBUS_TX_BUFFER_DEPTH 4
