@@ -32,6 +32,9 @@ LICENSE:
 
 #include "eax_aes.h"
 
+#define printf(format, ...) printf_P (PSTR(format), ##__VA_ARGS__)
+#define lprintf(format, ...) fprintf_P (stderr, PSTR(format), ##__VA_ARGS__)
+
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
@@ -128,11 +131,13 @@ uint8_t recvBufferCount;
 #define MAXCLIENTS 1
 client_t clients[MAXCLIENTS];
 
-#define DD_SS     PINB2
-#define DD_MOSI     PINB3
-#define DD_MISO     PINB4
-#define DD_SCK     PINB5
-#define DDR_SPI    DDRB
+
+#define RING_BUFFER_SZ 20
+#define RING_BUFFER_NAME VFD_
+#include"../libs/avr-ringbuffer/avr-ringbuffer.h"
+#undef RING_BUFFER_SZ
+#undef RING_BUFFER_NAME
+VFDRingBuffer VFDringBuffer;
 
 
 // ******** Start 100 Hz Timer - Very Accurate Version
@@ -165,8 +170,11 @@ ISR(TIMER1_OVF_vect)
 
 ISR(SPI_STC_vect)
 {
-
-
+	if (VFD_ringBufferDepth(&VFDringBuffer) && VFD_timer==0 && (PIND&(1<<VFD_BUSY)))
+	{
+		SPDR = VFD_ringBufferPop(&VFDringBuffer)
+		VFD_timer=;
+	}
 }
 
 void RDP_USER_DATA_RECV(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
@@ -596,6 +604,15 @@ void init(void)
 	busVoltage = 0;
 	ADCSRA |= _BV(ADEN) | _BV(ADSC) | _BV(ADIE) | _BV(ADIF);
 */
+
+	VFD_ringBufferInitialize(&VFDringBuffer);
+
+	FILE log_str = FDEV_SETUP_STREAM(log_putchar, log_getchar, _FDEV_SETUP_RW);
+	FILE vfd_str = FDEV_SETUP_STREAM(vfd_putchar, NULL, _FDEV_SETUP_WRITE);
+
+	stdout = stdin = &vfd_str;
+	stderr = &log_str;
+
 
 aes128_init(MASTERKEY, &master_aes_ctx);
 cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
