@@ -157,34 +157,41 @@ class RandUser(Evobj):
 
 
 
-class RDB(Evobj):
-  class RDB_Connection():
-    STATE_CLOSED     = 0
-    STATE_LISTEN     = 1
+class RDP(Evobj):
+  class RDP_Connection():
+    #STATE_CLOSED     = 0  not used here. handled as connection dictionary entry for that address being None
+    #STATE_LISTEN     = 1  not used here. handled in protocol, not connection
     STATE_SYN_SENT   = 2
     STATE_SYN_RCVD   = 3
     STATE_OPEN       = 4
     STATE_CLOSE_WAIT = 5
 
-    def __init__(self):
-      self.state = self.STATE_CLOSED
-      
+    def __init__(self, active=False):
+      if active:
+        self.state = self.STATE_SYN_SENT
+      else:
+        self.state = self.STATE_SYN_RCVD
     
   def __init__(self, node):
+    def _handler(p):
+      if p.cmd >= 0x80 and p.cmd < 0x80+16+3:
+        return True #eat packet
+
     self.node = node
-    self.connections = {} 
+    self.connections = {}
+    self.hint=node.install(_handler)
+    self.listening=False
+
+  def __dell__(self):
+    self.node.remove(self.hint)
 
 
   def listen(self):
-    def do(p):
-      print p
-    hint = self.node.install(do, -1)
+    self.listening=True
     
   def open(self, dest):
     assert dest not in self.connections
-    c = self.RDB_Connection()
-    self.connections[dest]=c
-    c.state = self.RDB_Connection.STATE_SYN_SENT
+    self.connections[dest] = self.RDP_Connection(True)
     self.node.sendpkt([128, 0])
 
 
@@ -210,15 +217,13 @@ def test():
   n2 = mrb1.getnode(2)
   n1 = mrb2.getnode(1)
 
-  r1=RDB(n1)
-  r2=RDB(n2)
+  r1=RDP(n1)
+  r2=RDP(n2)
 
 
   r2.listen()
-  n2.pump()
   r1.open(2)
-  n1.pump()
-
+ 
   sim.run()
 
   rnd1=RandUser(n1, n2)

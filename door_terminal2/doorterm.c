@@ -25,6 +25,7 @@ LICENSE:
 #include <avr/wdt.h>
 #include <util/delay.h>
 #include <string.h>
+#include <stdbool.h>
 
 #include "mrbus.h"
 #include "mrbus_bootloader_builtins.h"
@@ -42,11 +43,77 @@ aes128_ctx_t master_aes_ctx;//maybe not used outside of cmacctx. drop as global?
 cmac_aes_ctx_t master_cmac_ctx;//maybe not needed on master after testing
 uint32_t master_key_salt;
 
-aes128_ctx_t client_aes_ctx;//maybe not used outside of cmacctx. drop as global?
-cmac_aes_ctx_t client_cmac_ctx;
-uint8_t client_eax_nonce[6];
-uint16_t clientPktCounter;
 
+//client definable setting
+#define RDP_RECV_OVERLOAD 6
+#define RDP_MAX_RECV_USER_PKT_SIZE 100
+#define RDP_MAX_TX_OVERLOAD 6
+#define RDP_MAX_TX_USER_PKT_SIZE 100
+
+
+
+//doesn't change
+#define RDP_SEQ_N 16 //size of the packet type allocation for mrbus. 
+#define RDP_DATA_TAG_SIZE 4
+#define RDP_MAX_CONTROL_PKT_SIZE 100
+#if RDP_RECV_OVERLOAD > 8
+#error buffer too big. limited by RDP_SEQ_N and bits in recvMarkers
+#endif
+#if RDP_RECV_OVERLOAD < 1
+#error so, i have to ack a packet before you send it?  do tell me about your temporal network.
+#endif
+#define RDP_MAX_DATA_PER_PKT (MRBUS_BUFFER_SIZE)-6-(RDP_DATA_TAG_SIZE)
+#if RDP_MAX_DATA_PER_PKT >= 256
+#error buffer too big. coded to need less than a byte for size here
+#endif
+#define RDP_MAX_RECV_PKT_SIZE max((RDP_MAX_RECV_USER_PKT_SIZE), (RDP_MAX_CONTROL_PKT_SIZE))
+#if RDP_MAX_RECV_PKT_SIZE > 0xfff
+#error buffer too big. coded to need less than a 12 bits for size here
+#endif
+
+typedef struct {
+	uint8_t missingPkt[RDP_MAX_DATA_PER_PKT];
+	uint16_t dataLen;
+	uint8_t pktsInData;
+	uint8_t collapsedData[0];
+} RDP_buffer_slot_t; 
+
+typedef struct {
+	uint16_t channel_and_len;
+	uint8_t data[RDP_MAX_RECV_PKT_SIZE];
+} RDP_recv_datagram_t; 
+
+typedef struct {
+	uint16_t pktNum;
+	uint16_t timer;
+	uint8_t mrbPkt[MRBUS_BUFFER_SIZE];
+} RDP_tx_pkt_queue_t; 
+
+#define RDP_RECV_PKT_BUFFER_SIZE max(RDP_RECV_OVERLOAD*sizeof(RDP_buffer_slot_t), sizeof(RDP_recv_datagram_t)+sizeof(RDP_buffer_slot_t))
+
+#define ct_assert(e) ((void)sizeof(char[1 - 2*!(e)]))
+
+typedef struct {
+uint8_t addr;
+
+cmac_aes_ctx_t cmac_ctx;
+uint8_t eax_nonce[6];
+
+uint8_t sendOverload;
+uint16_t sendPktCounter;
+RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
+
+uint16_t recvPktCounter;
+#if RDP_RECV_OVERLOAD > 1
+uint16_t recvPktFirstMissing;
+uint8_t recvMarkers;
+uint8_t recvBuffer[RDP_RECV_PKT_BUFFER_SIZE];
+uint8_t recvBufferCount;
+#endif
+} client_t; 
+
+#define MAXCLIENTS 1
+client_t clients[MAXCLIENTS];
 
 #define DD_SS     PINB2
 #define DD_MOSI     PINB3
@@ -89,6 +156,88 @@ ISR(SPI_STC_vect)
 
 }
 
+void RDP_USER_DATA_RECV(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
+{
+//todo
+}
+
+
+void RDP_DATA_RECV(client_t *c)
+{
+	while (1)
+	{
+		if (c->recvBufferCount < 2)
+			return;
+
+		RDP_recv_datagram_t *dg=(void*)c->recvBuffer;
+		uint16_t len=dg->channel_and_len;
+		uint8_t channel=len>>12;
+		len=len&0xfff;
+		if (c->recvBufferCount < 2+len)
+			return;
+
+		uint8_t *data = c->recvBuffer+2;
+		if (channel==0)//control	 
+		{
+		//todo
+		}
+		else if (channel!=0xf)//not discard
+			RDP_USER_DATA_RECV(c, channel, len, data);
+			
+		memmove(c->recvBuffer, c->recvBuffer+len, RDP_RECV_PKT_BUFFER_SIZE-len);
+		c->recvBufferCount-=len;
+	}
+}
+
+void RDP_ACK(client_t *c, uint16_t pktNum, uint8_t code)
+{
+//todo: scan outgoing mrbus queue for an ack for this client that I could merge with this one using the "up to" flag
+	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
+	uint8_t hbuf[6];
+
+	hbuf[1] = txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+	hbuf[0] = txBuffer[MRBUS_PKT_DEST] = c->addr;
+	hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+3+8;
+	hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = 16+1-128;
+	*(uint16_t*)(hbuf+4) = *(uint16_t*)(txBuffer+6) = pktNum; 
+	txBuffer[8] = code;
+	*(uint16_t*)(c->eax_nonce+4) = pktNum|0X8000;
+	//encrypt
+	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, c->eax_nonce, 6, hbuf, 6, txBuffer+8, txBuffer[MRBUS_PKT_LEN]-8-8);
+	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+
+}
+void RDP_tx(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
+{
+
+//uint8_t sendOverload;
+//uint16_t sendPktCounter;
+//RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
+
+	uint8_t hbuf[4];
+	uint8_t *txBuffer = c->txPktBuffer[0].mrbPkt;//ASDF!
+	do
+	{
+
+		uint8_t *p=txBuffer+MRBUS_PKT_TYPE+1;
+		uint8_t pdlen=5;//ASDF!
+
+		uint16_t pktNum = c->sendPktCounter;
+
+		hbuf[1] = txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		hbuf[0] = txBuffer[MRBUS_PKT_DEST] = c->addr;
+		hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+pdlen+RDP_DATA_TAG_SIZE;
+		hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = (pktNum%16)-128;
+
+		*(uint16_t*)(c->eax_nonce+4) = pktNum;
+		//encrypt
+		eax_aes_enc(&c->cmac_ctx, txBuffer+6, RDP_DATA_TAG_SIZE, c->eax_nonce, 6, hbuf, 4, txBuffer+6, txBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE);
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+
+		len-=pdlen;
+		data+=pdlen;
+	}while(len);
+}
 
 
 void PktHandler(void)
@@ -226,25 +375,107 @@ PktIgnore:
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
-	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] < -96) 
+	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128) 
+	{
+		//secure channel packet ack
+	}
+	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] < RDP_SEQ_N+1-128) 
 	{
 		//secure channel packet
-		uint8_t pktType = rxBuffer[MRBUS_PKT_TYPE]&0x1F;
-		int8_t seqNum = pktType&7;
-		pktType >>= 3;
-		uint16_t pktNum = ;//some magic here from clientPktCounter and seqNum; 
-		//verify pkt and decrypt
-		uint8_t hbuf[4];
+		client_t *c=clients;
+		for (uint8_t i=0;i<MAXCLIENTS; i++, c++)
+			if(c->addr==rxBuffer[MRBUS_PKT_SRC])
+				break;
+		if(c>=clients+MAXCLIENTS)
+			goto PktIgnore;
+		uint8_t hbuf[6];
 		hbuf[0] = rxBuffer[MRBUS_PKT_DEST];
 		hbuf[1] = rxBuffer[MRBUS_PKT_SRC];
 		hbuf[2] = rxBuffer[MRBUS_PKT_LEN];
 		hbuf[3] = rxBuffer[MRBUS_PKT_TYPE];
-		*(uint16_t*)(client_eax_nonce+4) = pktNum;
-		if(0 == eax_aes_dec(&client_cmac_ctx, rxBuffer+6, 4, client_eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
-			goto PktIgnore;
+		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == 16+1-128) 
+		{//ack
+			if (rxBuffer[MRBUS_PKT_LEN] <6+3)//too short?
+				goto PktIgnore;
+			uint16_t pktNum = *(uint16_t*)(rxBuffer+6); 
+			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
+				goto PktIgnore;
+			*(uint16_t*)(hbuf+4) = pktNum;
+			*(uint16_t*)(c->eax_nonce+4) = pktNum|0X8000;
+			//verify pkt and decrypt
+			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+8, 8, c->eax_nonce, 6, hbuf, 6, rxBuffer+8, rxBuffer[MRBUS_PKT_LEN]-8))
+				goto PktIgnore;
+			//ok, ack recvd pktNum, flags in rxBuffer[8].
+		}
+		else
+		{
+			int8_t seqNum = rxBuffer[MRBUS_PKT_TYPE]&0xF;
+			uint16_t pktNum = ((seqNum-((c->recvPktCounter&(RDP_RECV_OVERLOAD*2-1))-RDP_RECV_OVERLOAD)-1)&(RDP_RECV_OVERLOAD*2-1))+1+c->recvPktCounter-RDP_RECV_OVERLOAD;//some magic here from clientPktCounter and seqNum; 
+			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
+				goto PktIgnore;
+			*(uint16_t*)(c->eax_nonce+4) = pktNum;
+			//verify pkt and decrypt
+			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+6, RDP_DATA_TAG_SIZE, c->eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
+				goto PktIgnore;
+
+			uint8_t sz=rxBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE;
+			//ok, data recvd pktNum, in rxBuffer+6, size sz
+			if(c->recvPktCounter<pktNum)
+				c->recvPktCounter=pktNum;
+
+			if(pktNum-c->recvPktFirstMissing>=RDP_RECV_OVERLOAD)//shouldn't be able to happen if I got my math right above
+			{
+				RDP_ACK(c, pktNum, 1);
+				goto PktIgnore;
+			}
+
+			if(pktNum<c->recvPktFirstMissing || c->recvMarkers&(1<<(pktNum-c->recvPktFirstMissing)))//we don't need this again
+			{
+				RDP_ACK(c, pktNum, 2);
+				goto PktIgnore;
+			}
+			
+			RDP_buffer_slot_t *p = (void*)(c->recvBuffer+c->recvBufferCount); 
+			int8_t x = pktNum-c->recvPktFirstMissing;
+
+			if(x==0)
+			{
+				if (RDP_RECV_PKT_BUFFER_SIZE-c->recvBufferCount <sz)//don't particularly worry about overrun.  there is allocated space for a full datagram plus a new packet.
+				{//this should only happen if a previous RDP_DATA_RECV ignores a full datagram, which "shouldn't" happen, so lets not worry about handling it very well.
+					RDP_DATA_RECV(c);
+					goto PktIgnore;
+				}
+				do
+				{
+					c->recvMarkers>>=1;
+					++c->recvPktFirstMissing;
+				}while (c->recvMarkers&1);
+				c->recvBufferCount+=sz+p->dataLen;
+			}
+			else
+			{
+				while (x > 0 && (void*)(p+1)<=(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE))
+				{
+					x--;//count the missing packet in this slot
+					x-=p->pktsInData;//count the packets that have been collapsed into the data of this slot
+					p=(void*)(((uint8_t*)(p+1))+p->dataLen); //advance p
+				}
+				if(x!=0 || (void*)(p+1)>(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE)) //there is no room in the buffer for this packet
+					goto PktIgnore;
+
+				c->recvMarkers|=(1<<(pktNum-c->recvPktFirstMissing));
+				(p-1)->pktsInData++;
+				(p-1)->dataLen+=sz;
+			}
+			RDP_ACK(c, pktNum, 0);
+			memcpy(p->missingPkt, rxBuffer+6, sz);
+			memmove((uint8_t*)p+sz, p->collapsedData, c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-p->collapsedData);
+			memset(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-(p->collapsedData-((uint8_t*)p+sz)), 0, p->collapsedData-((uint8_t*)p+sz));
+
+			RDP_DATA_RECV(c);
+		}
 
 
-	
 	
 	
 	}
@@ -255,25 +486,27 @@ PktIgnore:
 	//*************** END PACKET HANDLER  ***************
 }
 
-void keySetup(){
+void keySetup(client_t *c){
 //worst key derivation function eva!!!
 //replace later
 	uint8_t buf[16];
+
+	memset(c, 0, sizeof(client_t));
+	aes128_ctx_t client_aes_ctx;
 
 	memset(buf+4, 0, 16-4-1);
 	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
   buf[15] = 1;
 	aes128_enc(buf, &master_aes_ctx);
 	aes128_init(buf, &client_aes_ctx);
-	cmac_aes_init(&client_aes_ctx, &client_cmac_ctx);
+	cmac_aes_init(&client_aes_ctx, &c->cmac_ctx);
 
 	memset(buf+4, 0, 16-4-1);
 	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
   buf[15] = 2;
 	aes128_enc(buf, &master_aes_ctx);
-	memcpy(&client_eax_nonce, buf, 4);
+	memcpy(c->eax_nonce, buf, 4);
 	
-	clientPktCounter=0;
 }
 
 
@@ -339,7 +572,9 @@ aes128_init(MASTERKEY, &master_aes_ctx);
 cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
 master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword((const uint32_t*)EE_MASTER_SALT);
 
-keySetup();
+for (uint8_t i=0;i<MAXCLIENTS; i++)
+	keySetup(clients+i);
+
 }
 
 #define MRBUS_TX_BUFFER_DEPTH 4
@@ -350,6 +585,8 @@ MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
 
 int main(void)
 {
+ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uhave chosen buffer sizes that require you to change client_t.recvBufferCount to a uint16_t. I can't do it automatically since sizeof isn't available to the preprocessor
+
 	// Application initialization
 	init();
 
