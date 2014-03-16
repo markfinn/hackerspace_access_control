@@ -35,6 +35,19 @@ LICENSE:
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
+
+//Port B
+#define MOSI                  3
+#define MISO                  4
+#define SCK                   5
+
+//port D
+#define NFC_SS                4
+#define VFD_RESET__NFC_WAKE   5
+#define VFD_SS                6
+#define VFD_BUSY              7
+
+
 #define EE_MASTER_SALT 4
 
 
@@ -496,14 +509,14 @@ void keySetup(client_t *c){
 
 	memset(buf+4, 0, 16-4-1);
 	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
-  buf[15] = 1;
+	buf[15] = 1;
 	aes128_enc(buf, &master_aes_ctx);
 	aes128_init(buf, &client_aes_ctx);
 	cmac_aes_init(&client_aes_ctx, &c->cmac_ctx);
 
 	memset(buf+4, 0, 16-4-1);
 	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
-  buf[15] = 2;
+	buf[15] = 2;
 	aes128_enc(buf, &master_aes_ctx);
 	memcpy(c->eax_nonce, buf, 4);
 	
@@ -512,10 +525,20 @@ void keySetup(client_t *c){
 
 void init(void)
 {
-	// Set MOSI and SCK output, all others input
-	DDR_SPI = (1<<DD_MOSI)|(1<<DD_SCK);
-	// Enable SPI, Master, set clock rate fck/16
-//	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0);
+	//set all pins to input with pull ups..
+	MCUCR=0;
+	PORTB = PORTC = PORTD = 0xff;
+	DDRB = DDRC = DDRD = 0;
+
+	PORTD = (1<<NFC_SS)|(1<<VFD_RESET__NFC_WAKE);
+
+	// Set MOSI, SCK, SSs, and reset to output.  also set PB2, which is SPI SS. needs to be output for master mode to work.  mabe move one of our SSs here later 
+	DDRB = (1<<MOSI)|(1<<SCK)|(1<<2);
+	DDRD = (1<<NFC_SS)|(1<<VFD_SS)|(1<<VFD_RESET__NFC_WAKE);
+
+	// Enable SPI, Master, set clock rate fck/16, SPI mode 1,1
+	PRR &=~(1<<PRSPI);
+	SPCR = (1<<SPE)|(1<<MSTR)|(1<<SPR0)|(1<<CPOL)|(1<<CPHA);
 	
 	// Clear watchdog (in the case of an 'X' packet reset)
 	MCUSR = 0;
@@ -529,6 +552,12 @@ void init(void)
 	wdt_reset();
 	wdt_disable();
 #endif	
+	
+	_delay_ms(2);
+	PORTD &= ~(1<<VFD_RESET__NFC_WAKE);
+	_delay_ms(2);
+	PORTD |= (1<<VFD_RESET__NFC_WAKE);
+
 
 	pkt_count = 0;
 
@@ -574,6 +603,9 @@ master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword(
 
 for (uint8_t i=0;i<MAXCLIENTS; i++)
 	keySetup(clients+i);
+
+
+
 
 }
 
