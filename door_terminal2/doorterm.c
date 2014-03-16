@@ -110,7 +110,7 @@ typedef struct {
 uint8_t addr;
 
 cmac_aes_ctx_t cmac_ctx;
-uint8_t eax_nonce[6];
+uint16_t eax_nonce[3];
 
 uint8_t sendOverload;
 uint16_t sendPktCounter;
@@ -214,9 +214,9 @@ void RDP_ACK(client_t *c, uint16_t pktNum, uint8_t code)
 	hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = 16+1-128;
 	*(uint16_t*)(hbuf+4) = *(uint16_t*)(txBuffer+6) = pktNum; 
 	txBuffer[8] = code;
-	*(uint16_t*)(c->eax_nonce+4) = pktNum|0X8000;
+	c->eax_nonce[2] = pktNum|0X8000;
 	//encrypt
-	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, c->eax_nonce, 6, hbuf, 6, txBuffer+8, txBuffer[MRBUS_PKT_LEN]-8-8);
+	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 6, txBuffer+8, txBuffer[MRBUS_PKT_LEN]-8-8);
 	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 
 }
@@ -242,9 +242,9 @@ void RDP_tx(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
 		hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+pdlen+RDP_DATA_TAG_SIZE;
 		hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = (pktNum%16)-128;
 
-		*(uint16_t*)(c->eax_nonce+4) = pktNum;
+		c->eax_nonce[2] = pktNum;
 		//encrypt
-		eax_aes_enc(&c->cmac_ctx, txBuffer+6, RDP_DATA_TAG_SIZE, c->eax_nonce, 6, hbuf, 4, txBuffer+6, txBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE);
+		eax_aes_enc(&c->cmac_ctx, txBuffer+6, RDP_DATA_TAG_SIZE, (uint8_t*)c->eax_nonce, 6, hbuf, 4, txBuffer+6, txBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE);
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 
 		len-=pdlen;
@@ -414,9 +414,9 @@ PktIgnore:
 			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
 				goto PktIgnore;
 			*(uint16_t*)(hbuf+4) = pktNum;
-			*(uint16_t*)(c->eax_nonce+4) = pktNum|0X8000;
+			c->eax_nonce[2] = pktNum|0X8000;
 			//verify pkt and decrypt
-			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+8, 8, c->eax_nonce, 6, hbuf, 6, rxBuffer+8, rxBuffer[MRBUS_PKT_LEN]-8))
+			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 6, rxBuffer+8, rxBuffer[MRBUS_PKT_LEN]-8))
 				goto PktIgnore;
 			//ok, ack recvd pktNum, flags in rxBuffer[8].
 		}
@@ -426,9 +426,9 @@ PktIgnore:
 			uint16_t pktNum = ((seqNum-((c->recvPktCounter&(RDP_RECV_OVERLOAD*2-1))-RDP_RECV_OVERLOAD)-1)&(RDP_RECV_OVERLOAD*2-1))+1+c->recvPktCounter-RDP_RECV_OVERLOAD;//some magic here from clientPktCounter and seqNum; 
 			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
 				goto PktIgnore;
-			*(uint16_t*)(c->eax_nonce+4) = pktNum;
+			c->eax_nonce[2] = pktNum;
 			//verify pkt and decrypt
-			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+6, RDP_DATA_TAG_SIZE, c->eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
+			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+6, RDP_DATA_TAG_SIZE, (uint8_t*)c->eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
 				goto PktIgnore;
 
 			uint8_t sz=rxBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE;
