@@ -26,6 +26,8 @@ LICENSE:
 #include <util/delay.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdio.h>
+#include <avr/pgmspace.h>
 
 #include "mrbus.h"
 #include "mrbus_bootloader_builtins.h"
@@ -48,7 +50,8 @@ uint8_t pkt_count = 0;
 #define NFC_SS                4
 #define VFD_RESET__NFC_WAKE   5
 #define VFD_SS                6
-#define VFD_BUSY              7
+#define VFD_BUSY              7 //also drives a pin change int23
+
 
 
 #define EE_MASTER_SALT 4
@@ -137,8 +140,25 @@ client_t clients[MAXCLIENTS];
 #include"../libs/avr-ringbuffer/avr-ringbuffer.h"
 #undef RING_BUFFER_SZ
 #undef RING_BUFFER_NAME
-VFDRingBuffer VFDringBuffer;
+VFD_RingBuffer VFD_ringBuffer;
 
+
+typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
+typedef enum {VFD_NEEDSTARTTIMEOUT, VFD_BUSYWAIT, VFD_OK} VFDstate_t;
+typedef enum {NFC_POLL, NFC_WRITE, NFC_READ} NFCstate_t;
+typedef struct {
+/*
+SPIsent_t SPI_sent : 2;FUCK
+VFDstate_t VFD_state : 2;
+NFCstate_t NFC_state : 2;
+*/
+SPIsent_t SPI_sent;
+VFDstate_t VFD_state;
+NFCstate_t NFC_state;
+uint8_t VFD_timer;
+} SPIStates_t;
+
+SPIStates_t SPIState;
 
 
 volatile uint16_t update_decisecs;
@@ -156,9 +176,23 @@ void initialize100HzTimer(void)
 	TIMSK0 |= _BV(OCIE0A);
 }
 
+uint8_t vfdtrysend()
 {
+	if((SPIState.VFD_state == VFD_BUSYWAIT && SPIState.VFD_timer == 0 ) && 0==(PIND&(1<<VFD_BUSY)))
+		SPIState.VFD_state = VFD_OK;
+
+	if (SPIState.VFD_state == VFD_OK && VFD_ringBufferDepth(&VFD_ringBuffer))
 	{
+		PORTD |= (1<<NFC_SS);
+		PORTD |= (1<<VFD_SS);
+		SPCR |= (1<<DORD);
+		SPDR = VFD_ringBufferPopNonBlocking(&VFD_ringBuffer);
+		SPIState.SPI_sent=VFD_NEEDSTARTTIMEOUT;
+		SPCR |= (1<<SPIE);
+		return 1;
 	}
+	return 0;
+}
 
 ISR(TIMER0_COMPA_vect)
 {
@@ -174,17 +208,72 @@ ISR(TIMER0_COMPA_vect)
 }
 
 
+ISR(PCINT2_vect)
+{
+	if(0==(SPCR & (1<<SPIE)))
+		vfdtrysend();
 }
 
 
 ISR(SPI_STC_vect)
 {
-	if (VFD_ringBufferDepth(&VFDringBuffer) && VFD_timer==0 && (PIND&(1<<VFD_BUSY)))
+	if(SPIState.VFD_state == VFD_NEEDSTARTTIMEOUT)//the lst thing was a VFD byte, and we haven't waited for the busy line delay yet
 	{
-		SPDR = VFD_ringBufferPop(&VFDringBuffer)
-		VFD_timer=;
+		PORTD &= ~(1<<VFD_SS);
+		SPIState.VFD_timer=2;
+		SPIState.VFD_state = VFD_BUSYWAIT;
 	}
+
+//	if(SPIState.SPI_sent == SPI_NFC)
+//		NFC_ringBufferPush(&NFCringBuffer, SPDR)
+
+	if (vfdtrysend())
+	{}//uses SPI internally
+/*	else if (NFC_ringBufferDepth(&NFCringBuffer))
+	{
+		PORTD &= ~(1<<VFD_SS);
+		PORTD &= ~(1<<NFC_SS);
+		SPCR &= ~(1<<DORD);
+		SPDR = NFC_ringBufferPop(&NFCringBuffer)
+		SPI_sent = SPI_NFC;
+		SPCR |= (1<<SPIE);
+	}*/
+	else
+		SPCR &= ~(1<<SPIE);
 }
+
+static int log_putchar(char c, FILE *stream)
+{
+	return 0;
+}
+static int log_getchar(FILE *stream)
+{
+	return 0;
+}
+static int vfd_putchar(char c, FILE *stream)
+{
+/*
+0x08: backspace
+0x09: forward
+0x0a: crlf
+0x0b: home
+0x0c: clear/home
+0x0d: carriage return
+
+*/
+
+	if (c==0x0a)//lf into crlf
+		VFD_ringBufferPushBlocking(&VFD_ringBuffer, 0x0d);
+	VFD_ringBufferPushBlocking(&VFD_ringBuffer, c);
+	cli();
+	if(0==(SPCR & (1<<SPIE)))
+		vfdtrysend();
+	sei();
+	return 0;
+}
+
+static FILE log_str = FDEV_SETUP_STREAM(log_putchar, log_getchar, _FDEV_SETUP_RW);
+static FILE vfd_str = FDEV_SETUP_STREAM(vfd_putchar, NULL, _FDEV_SETUP_WRITE);
 
 void RDP_USER_DATA_RECV(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
 {
@@ -547,11 +636,11 @@ void init(void)
 	PORTB = PORTC = PORTD = 0xff;
 	DDRB = DDRC = DDRD = 0;
 
-	PORTD = (1<<NFC_SS)|(1<<VFD_RESET__NFC_WAKE);
 
 	// Set MOSI, SCK, SSs, and reset to output.  also set PB2, which is SPI SS. needs to be output for master mode to work.  mabe move one of our SSs here later 
 	DDRB = (1<<MOSI)|(1<<SCK)|(1<<2);
 	DDRD = (1<<NFC_SS)|(1<<VFD_SS)|(1<<VFD_RESET__NFC_WAKE);
+	PORTD = ~(1<<VFD_SS);
 
 	// Enable SPI, Master, set clock rate fck/16, SPI mode 1,1
 	PRR &=~(1<<PRSPI);
@@ -570,11 +659,10 @@ void init(void)
 	wdt_disable();
 #endif	
 	
-	_delay_ms(2);
-	PORTD &= ~(1<<VFD_RESET__NFC_WAKE);
-	_delay_ms(2);
-	PORTD |= (1<<VFD_RESET__NFC_WAKE);
 
+	//turn on the pin change interupt from the VFD busy flag
+	PCMSK2 = 1<<VFD_BUSY;
+	PCICR = 1<<PCIE2;
 
 	pkt_count = 0;
 
@@ -614,24 +702,29 @@ void init(void)
 	ADCSRA |= _BV(ADEN) | _BV(ADSC) | _BV(ADIE) | _BV(ADIF);
 */
 
-	VFD_ringBufferInitialize(&VFDringBuffer);
+	VFD_ringBufferInitialize(&VFD_ringBuffer);
+	SPIState = (SPIStates_t){SPI_VFD, VFD_BUSYWAIT, NFC_POLL, 10};
 
-	FILE log_str = FDEV_SETUP_STREAM(log_putchar, log_getchar, _FDEV_SETUP_RW);
-	FILE vfd_str = FDEV_SETUP_STREAM(vfd_putchar, NULL, _FDEV_SETUP_WRITE);
+	decisecs=0;
+	ticks50khz=0;
+
 
 	stdout = stdin = &vfd_str;
 	stderr = &log_str;
 
-
-aes128_init(MASTERKEY, &master_aes_ctx);
-cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
-master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword((const uint32_t*)EE_MASTER_SALT);
-
-for (uint8_t i=0;i<MAXCLIENTS; i++)
-	keySetup(clients+i);
+	_delay_ms(2);
+	PORTD &= ~(1<<VFD_RESET__NFC_WAKE);
+	_delay_ms(2);
+	PORTD |= (1<<VFD_RESET__NFC_WAKE);
 
 
 
+	aes128_init(MASTERKEY, &master_aes_ctx);
+	cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
+	master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword((const uint32_t*)EE_MASTER_SALT);
+
+	for (uint8_t i=0;i<MAXCLIENTS; i++)
+		keySetup(clients+i);
 
 }
 
@@ -659,6 +752,8 @@ ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uh
 
 	sei();	
 
+	printf("Hello World");
+
 	while (1)
 	{
 		wdt_reset();
@@ -676,6 +771,7 @@ ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uh
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
 
+			printf("pkt_count %d\n", pkt_count);
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_LEN] = 9;
