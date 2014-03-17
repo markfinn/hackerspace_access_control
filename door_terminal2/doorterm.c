@@ -140,31 +140,40 @@ client_t clients[MAXCLIENTS];
 VFDRingBuffer VFDringBuffer;
 
 
-// ******** Start 100 Hz Timer - Very Accurate Version
 
-volatile uint8_t ticks;
-volatile uint16_t decisecs=0;
-volatile uint16_t update_decisecs=10;
+volatile uint16_t update_decisecs;
+volatile uint16_t decisecs;
+volatile uint16_t ticks50khz;
+
 
 void initialize100HzTimer(void)
 {
-	// Set up timer 1 for 100Hz interrupts
-	TCCR1A = 0;
-	TCCR1B = _BV(CS11) | _BV(CS10);
-	TCCR1C = 0;
-	TIMSK1 = _BV(TOIE1);
-	ticks = 0;
-	decisecs = 0;
+	// Set up timer 1 for 50kHz (20uS) interrupts
+	TCNT0 = 0;
+	OCR0A = 50;
+	TCCR0A = _BV(WGM01);
+	TCCR0B = _BV(CS01);// div/8 prescaler
+	TIMSK0 |= _BV(OCIE0A);
 }
 
-ISR(TIMER1_OVF_vect)
 {
-	TCNT1 += 0xF3CB;
-	if (++ticks >= 10)
 	{
-		ticks = 0;
-		decisecs++;
 	}
+
+ISR(TIMER0_COMPA_vect)
+{
+	ticks50khz++;
+	if((ticks50khz&0xfff)==0)//pretty inaccurate!
+		decisecs++;
+	if (SPIState.VFD_timer)
+	{
+		--SPIState.VFD_timer;
+		if(0==(SPCR & (1<<SPIE)))
+			vfdtrysend();
+	}		
+}
+
+
 }
 
 
