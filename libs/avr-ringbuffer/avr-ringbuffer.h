@@ -81,12 +81,11 @@ uint8_t _RING_BUFFER_NAMEIFY(ringBufferPushNonBlocking)(_RING_BUFFER_NAMEIFY(Rin
 
 void _RING_BUFFER_NAMEIFY(ringBufferPushBlocking)(_RING_BUFFER_NAMEIFY(RingBuffer)* r, uint8_t data)
 {
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	uint8_t res=0;
+	do
 	{
-		while (r->len >= _RING_BUFFER_SZ);
-
-		_RING_BUFFER_NAMEIFY(ringBufferPushNonBlocking)(r, data);
-	}
+		res=_RING_BUFFER_NAMEIFY(ringBufferPushNonBlocking)(r, data);
+	}while(res==0);
 }
 
 uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(_RING_BUFFER_NAMEIFY(RingBuffer)* r)
@@ -106,12 +105,18 @@ uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(_RING_BUFFER_NAMEIFY(Ring
 uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopBlocking)(_RING_BUFFER_NAMEIFY(RingBuffer)* r)
 {
 	uint8_t data;
-	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
-	{
-		while (r->len == 0);
+	uint8_t fail=1;
+	do{
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+			if (r->len == 0)
+			{
+				fail=0;
+				data = _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(r);
+			}
+		}
+	}while(fail);
 
-		data = _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(r);
-	}
 	return(data);
 }
 
