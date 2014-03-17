@@ -53,6 +53,12 @@ uint8_t pkt_count = 0;
 #define VFD_BUSY              7 //also drives a pin change int23
 
 
+#define MRBUS_TX_BUFFER_DEPTH 4
+#define MRBUS_RX_BUFFER_DEPTH 4
+
+MRBusPacket mrbusTxPktBufferArray[MRBUS_TX_BUFFER_DEPTH];
+MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
+
 
 #define EE_MASTER_SALT 4
 
@@ -717,6 +723,17 @@ void init(void)
 	_delay_ms(2);
 	PORTD |= (1<<VFD_RESET__NFC_WAKE);
 
+	// Initialize a 100 Hz timer.  See the definition for this function - you can
+	// remove it if you don't use it.
+	initialize100HzTimer();
+
+	printf("\x1b\x40Startup: Init");
+
+
+	// Initialize MRBus core
+	mrbusPktQueueInitialize(&mrbusTxQueue, mrbusTxPktBufferArray, MRBUS_TX_BUFFER_DEPTH);
+	mrbusPktQueueInitialize(&mrbusRxQueue, mrbusRxPktBufferArray, MRBUS_RX_BUFFER_DEPTH);
+	mrbusInit();
 
 
 	aes128_init(MASTERKEY, &master_aes_ctx);
@@ -726,13 +743,11 @@ void init(void)
 	for (uint8_t i=0;i<MAXCLIENTS; i++)
 		keySetup(clients+i);
 
+
+	sei();	
 }
 
-#define MRBUS_TX_BUFFER_DEPTH 4
-#define MRBUS_RX_BUFFER_DEPTH 8
 
-MRBusPacket mrbusTxPktBufferArray[MRBUS_TX_BUFFER_DEPTH];
-MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
 
 int main(void)
 {
@@ -741,18 +756,8 @@ ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uh
 	// Application initialization
 	init();
 
-	// Initialize a 100 Hz timer.  See the definition for this function - you can
-	// remove it if you don't use it.
-	initialize100HzTimer();
 
-	// Initialize MRBus core
-	mrbusPktQueueInitialize(&mrbusTxQueue, mrbusTxPktBufferArray, MRBUS_TX_BUFFER_DEPTH);
-	mrbusPktQueueInitialize(&mrbusRxQueue, mrbusRxPktBufferArray, MRBUS_RX_BUFFER_DEPTH);
-	mrbusInit();
-
-	sei();	
-
-	printf("Hello World");
+	printf("\x0cStartup: Main Top");
 
 	while (1)
 	{
