@@ -141,30 +141,25 @@ uint8_t recvBufferCount;
 client_t clients[MAXCLIENTS];
 
 
-#define RING_BUFFER_SZ 20
-#define RING_BUFFER_NAME VFD_
-#include"../libs/avr-ringbuffer/avr-ringbuffer.h"
-#undef RING_BUFFER_SZ
-#undef RING_BUFFER_NAME
-VFD_RingBuffer VFD_ringBuffer;
 
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
 typedef enum {VFD_NEEDSTARTTIMEOUT, VFD_BUSYWAIT, VFD_OK} VFDstate_t;
 typedef enum {NFC_POLL, NFC_WRITE, NFC_READ} NFCstate_t;
+
 typedef struct {
-/*
-SPIsent_t SPI_sent : 2;FUCK
+SPIsent_t SPI_sent : 2;
 VFDstate_t VFD_state : 2;
 NFCstate_t NFC_state : 2;
-*/
-SPIsent_t SPI_sent;
-VFDstate_t VFD_state;
-NFCstate_t NFC_state;
 uint8_t VFD_timer;
 } SPIStates_t;
-
 SPIStates_t SPIState;
+#define RING_BUFFER_SZ 16
+#define RING_BUFFER_NAME VFD_
+#include"../libs/avr-ringbuffer/avr-ringbuffer.h"
+#undef RING_BUFFER_SZ
+#undef RING_BUFFER_NAME
+VFD_RingBuffer VFD_ringBuffer;
 
 
 volatile uint16_t update_decisecs;
@@ -184,7 +179,7 @@ void initialize100HzTimer(void)
 
 uint8_t vfdtrysend()
 {
-	if((SPIState.VFD_state == VFD_BUSYWAIT && SPIState.VFD_timer == 0 ) && 0==(PIND&(1<<VFD_BUSY)))
+	if(SPIState.VFD_state == VFD_BUSYWAIT && SPIState.VFD_timer == 0 && 0==(PIND&(1<<VFD_BUSY)))
 		SPIState.VFD_state = VFD_OK;
 
 	if (SPIState.VFD_state == VFD_OK && VFD_ringBufferDepth(&VFD_ringBuffer))
@@ -192,9 +187,9 @@ uint8_t vfdtrysend()
 		PORTD |= (1<<NFC_SS);
 		PORTD |= (1<<VFD_SS);
 		SPCR |= (1<<DORD);
-		SPDR = VFD_ringBufferPopNonBlocking(&VFD_ringBuffer);
-		SPIState.SPI_sent=VFD_NEEDSTARTTIMEOUT;
+		SPIState.VFD_state=VFD_NEEDSTARTTIMEOUT;
 		SPCR |= (1<<SPIE);
+		SPDR = VFD_ringBufferPopNonBlocking(&VFD_ringBuffer);
 		return 1;
 	}
 	return 0;
@@ -226,7 +221,7 @@ ISR(SPI_STC_vect)
 	if(SPIState.VFD_state == VFD_NEEDSTARTTIMEOUT)//the lst thing was a VFD byte, and we haven't waited for the busy line delay yet
 	{
 		PORTD &= ~(1<<VFD_SS);
-		SPIState.VFD_timer=2;
+		SPIState.VFD_timer=3;//should only need 1 here, but between jitterm rounding, and sketchy VFD or busy handling...
 		SPIState.VFD_state = VFD_BUSYWAIT;
 	}
 
@@ -241,7 +236,7 @@ ISR(SPI_STC_vect)
 		PORTD &= ~(1<<NFC_SS);
 		SPCR &= ~(1<<DORD);
 		SPDR = NFC_ringBufferPop(&NFCringBuffer)
-		SPI_sent = SPI_NFC;
+		SPIState.SPI_sent = SPI_NFC;
 		SPCR |= (1<<SPIE);
 	}*/
 	else
@@ -620,12 +615,13 @@ void Noritake_VFD_GU7000::GU7000_drawImage_p(unsigned x, uint8_t y, unsigned wid
 */
 
 	if (c==0x0a)//lf into crlf
-		VFD_ringBufferPushBlocking(&VFD_ringBuffer, 0x0d);
+		vfd_putchar(0x0d, stream);
 	VFD_ringBufferPushBlocking(&VFD_ringBuffer, c);
-	cli();
-	if(0==(SPCR & (1<<SPIE)))
-		vfdtrysend();
-	sei();
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	{
+		if(0==(SPCR & (1<<SPIE)))
+				vfdtrysend();
+	}
 	return 0;
 }
 
@@ -1078,8 +1074,8 @@ void init(void)
 	// remove it if you don't use it.
 	initialize100HzTimer();
 
-	printf("\x1b\x40Startup: Init");
 
+	printf(VFDCOMMAND_INITIALIZE "Startup: Init");
 
 	// Initialize MRBus core
 	mrbusPktQueueInitialize(&mrbusTxQueue, mrbusTxPktBufferArray, MRBUS_TX_BUFFER_DEPTH);
@@ -1102,13 +1098,17 @@ void init(void)
 
 int main(void)
 {
-ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uhave chosen buffer sizes that require you to change client_t.recvBufferCount to a uint16_t. I can't do it automatically since sizeof isn't available to the preprocessor
+ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, you have chosen buffer sizes that require you to change client_t.recvBufferCount to a uint16_t. I can't do it automatically since sizeof isn't available to the preprocessor
+
+
+uint8_t pkt_count = 0;
+		
 
 	// Application initialization
 	init();
 
+	printf(VFDCOMMAND_CLEARHOME "Startup: Main Loop Top");
 
-	printf("\x0cStartup: Main Top");
 
 	while (1)
 	{
@@ -1127,7 +1127,7 @@ ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, yo uh
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
 
-			printf("pkt_count %d\n", pkt_count);
+//			printf("pkt_count %d\n", pkt_count);
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_LEN] = 9;

@@ -92,7 +92,7 @@ BUSLOAD = python $(MRBOOTPATH)/load.py -p /dev/ttyUSB0 -a 0xfe -d 0x5c
 
 OBJS = ${SRCS:.c=.o}
 INCLUDES = -I. -I $(MRBPATH) -I $(MRBOOTPATH)
-CFLAGS  = $(INCLUDES) -Wall -O2 -std=gnu99 -ffunction-sections -fdata-sections
+CFLAGS  = $(INCLUDES) -Wall -O2 -std=gnu99 -ffunction-sections -fdata-sections -ggdb
 LDFLAGS = -Wl,-gc-sections
 
 COMPILE = avr-gcc $(DEFINES) -DF_CPU=$(F_CPU) $(CFLAGS) $(LDFLAGS) -mmcu=$(DEVICE)
