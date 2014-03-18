@@ -82,7 +82,7 @@ uint32_t master_key_salt;
 
 //doesn't change
 #define RDP_SEQ_N 16 //size of the packet type allocation for mrbus. 
-#define RDP_DATA_TAG_SIZE 4
+#define RDP_DATA_TAG_SIZE 5
 #define RDP_MAX_CONTROL_PKT_SIZE 100
 #if RDP_RECV_OVERLOAD > 8
 #error buffer too big. limited by RDP_SEQ_N and bits in recvMarkers
@@ -123,6 +123,7 @@ typedef struct {
 
 typedef struct {
 uint8_t addr;
+uint8_t maxpktsize;
 
 cmac_aes_ctx_t cmac_ctx;
 uint16_t eax_nonce[3];
@@ -165,12 +166,11 @@ SPIStates_t SPIState;
 VFD_RingBuffer VFD_ringBuffer;
 
 
-volatile uint16_t update_decisecs;
 volatile uint16_t decisecs;
 volatile uint16_t ticks50khz;
 
 
-void initialize100HzTimer(void)
+void initialize50kHzTimer(void)
 {
 	// Set up timer 1 for 50kHz (20uS) interrupts
 	TCNT0 = 0;
@@ -594,31 +594,67 @@ PktIgnore:
 	
 	
 	}
-
-	// FIXME:  Insert code here to handle incoming packets specific
-	// to the device.
-
 	//*************** END PACKET HANDLER  ***************
 }
 
-void keySetup(client_t *c){
+
+
+uint16_t masterSaltGetNext(uint16_t salt, uint8_t remote_addr)
+{
+	//zero is bad
+	if (salt==0)
+	{
+		//other end tried to use an invalid salt.
+		lprintE("remote %d attempted 0 master salt", remote_addr);
+		return 0;
+	}
+	uint16_t s = 1+eeprom_read_word((const uint16_t*)EE_MASTER_SALT);
+	if (s!=0)
+	{
+		salt = max(salt, s);
+
+		eeprom_write_word((uint16_t*)EE_MASTER_SALT, salt);
+		if(eeprom_read_word((const uint16_t*)EE_MASTER_SALT) == salt)
+		{
+			if(salt > 32768)
+				lprintW("master salt at %d%%", salt/328);
+			return salt;
+		}
+	}
+	//eeprom seems to have gone bad or the salt is run out
+	lprintE("master salt overused");
+	fatalError = PSTR("master salt overused");
+	return 0;
+}
+
+void keySetup(client_t *c, uint8_t remote_addr, uint16_t negotiated_salt)
+{
 //worst key derivation function eva!!!
 //replace later
 	uint8_t buf[16];
-
-	memset(c, 0, sizeof(client_t));
 	aes128_ctx_t client_aes_ctx;
 
-	memset(buf+4, 0, 16-4-1);
-	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
-	buf[15] = 1;
+	memset(c, 0, sizeof(client_t));
+	c->addr = remote_addr;
+	c->maxpktsize=20;
+
+
+	memset(buf+5, 0, 16-5);
+	buf[0] = negotiated_salt;
+	buf[1] = negotiated_salt>>8;
+	buf[2] = min(mrbus_dev_addr, remote_addr);
+	buf[3] = max(mrbus_dev_addr, remote_addr);
+	buf[4] = 1;
 	aes128_enc(buf, &master_aes_ctx);
 	aes128_init(buf, &client_aes_ctx);
 	cmac_aes_init(&client_aes_ctx, &c->cmac_ctx);
 
-	memset(buf+4, 0, 16-4-1);
-	memcpy(buf, &master_key_salt, sizeof(master_key_salt));
-	buf[15] = 2;
+	memset(buf+5, 0, 16-5);
+	buf[0] = negotiated_salt;
+	buf[1] = negotiated_salt>>8;
+	buf[2] = min(mrbus_dev_addr, remote_addr);
+	buf[3] = max(mrbus_dev_addr, remote_addr);
+	buf[4] = 2;
 	aes128_enc(buf, &master_aes_ctx);
 	memcpy(c->eax_nonce, buf, 4);
 	
@@ -660,31 +696,6 @@ void init(void)
 	PCMSK2 = 1<<VFD_BUSY;
 	PCICR = 1<<PCIE2;
 
-	pkt_count = 0;
-
-	// Initialize MRBus address from EEPROM
-	mrbus_dev_addr = eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR);
-	// Bogus addresses, fix to default address
-	if (0xFF == mrbus_dev_addr || 0x00 == mrbus_dev_addr)
-	{
-		mrbus_dev_addr = 0x03;
-		eeprom_write_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR, mrbus_dev_addr);
-	}
-	
-	update_decisecs = (uint16_t)eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_UPDATE_L) 
-		| (((uint16_t)eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_UPDATE_H)) << 8);
-
-	// This line assures that update_decisecs is at least 1
-	update_decisecs = max(1, update_decisecs);
-	
-	// FIXME: This line assures that update_decisecs is 2 seconds or less
-	// You probably don't want this, but it prevents new developers from wondering
-	// why their new node doesn't transmit (uninitialized eeprom will make the update
-	// interval 64k decisecs, or about 110 hours)  You'll probably want to make this
-	// something more sane for your node type, or remove it entirely.
-	update_decisecs = min(20, update_decisecs);
-
-
 /*
 // Uncomment this block to set up the ADC to continuously monitor the bus voltage using a 3:1 divider tied into the ADC7 input
 // You also need to uncomment the ADC ISR near the top of the file
@@ -713,10 +724,7 @@ void init(void)
 	_delay_ms(2);
 	PORTD |= (1<<VFD_RESET__NFC_WAKE);
 
-	// Initialize a 100 Hz timer.  See the definition for this function - you can
-	// remove it if you don't use it.
-	initialize100HzTimer();
-
+	initialize50kHzTimer();
 
 	printf(VFDCOMMAND_INITIALIZE "Startup: Init");
 
@@ -726,13 +734,20 @@ void init(void)
 	mrbusInit();
 
 
+	// Initialize MRBus address from EEPROM
+	mrbus_dev_addr = eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR);
+	// Bogus addresses, fix to default address
+	if (0xFF == mrbus_dev_addr || 0x00 == mrbus_dev_addr)
+	{
+		mrbus_dev_addr = 0x03;
+		eeprom_write_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR, mrbus_dev_addr);
+	}
+
 	aes128_init(MASTERKEY, &master_aes_ctx);
 	cmac_aes_init(&master_aes_ctx, &master_cmac_ctx);
-	master_key_salt = 0;//uncomment once out of testing this part eeprom_read_dword((const uint32_t*)EE_MASTER_SALT);
 
 	for (uint8_t i=0;i<MAXCLIENTS; i++)
-		keySetup(clients+i);
-
+		memset(clients+i, 0, sizeof(client_t));
 
 	sei();	
 }
