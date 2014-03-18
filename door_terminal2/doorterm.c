@@ -166,7 +166,7 @@ SPIStates_t SPIState;
 VFD_RingBuffer VFD_ringBuffer;
 
 
-volatile uint16_t decisecs;
+volatile uint16_t secs;
 volatile uint16_t ticks50khz;
 
 
@@ -200,9 +200,13 @@ uint8_t vfdtrysend()
 
 ISR(TIMER0_COMPA_vect)
 {
+	static uint8_t next=0;
 	ticks50khz++;
-	if((ticks50khz&0xfff)==0)//pretty inaccurate!
-		decisecs++;
+	if(ticks50khz>>8==next)
+	{
+		secs++;//00.16%.  good enough.  about 2.3 minutes per day
+		next+=195;
+	}
 	if (SPIState.VFD_timer)
 	{
 		--SPIState.VFD_timer;
@@ -712,7 +716,7 @@ void init(void)
 	VFD_ringBufferInitialize(&VFD_ringBuffer);
 	SPIState = (SPIStates_t){SPI_VFD, VFD_BUSYWAIT, NFC_POLL, 10};
 
-	decisecs=0;
+	secs=0;
 	ticks50khz=0;
 
 
@@ -782,7 +786,7 @@ uint8_t pkt_count = 0;
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
 			
-		if (decisecs >= 20 && !(mrbusPktQueueFull(&mrbusTxQueue)))
+		if (secs >= 2 && !(mrbusPktQueueFull(&mrbusTxQueue)))
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
 
@@ -795,7 +799,7 @@ uint8_t pkt_count = 0;
 			txBuffer[7] = 'i';
 			txBuffer[8] = pkt_count++;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-			decisecs = 0;
+			secs = 0;
 		}	
 
 		if (mrbusPktQueueDepth(&mrbusTxQueue))
