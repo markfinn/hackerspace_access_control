@@ -18,6 +18,9 @@ LICENSE:
 
 *************************************************************************/
 
+#define DEBUGPRINT VFD //undefined, defined, or VFD
+
+
 #include <stdlib.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
@@ -34,12 +37,10 @@ LICENSE:
 
 #include "eax_aes.h"
 
-#define printf(format, ...) printf_P (PSTR(format), ##__VA_ARGS__)
-#define lprintf(format, ...) fprintf_P (stderr, PSTR(format), ##__VA_ARGS__)
 
 uint8_t mrbus_dev_addr = 0;
-uint8_t pkt_count = 0;
 
+ PGM_P fatalError = 0;
 
 //Port B
 #define MOSI                  3
@@ -1114,16 +1115,17 @@ uint8_t pkt_count = 0;
 	{
 		wdt_reset();
 
-#ifdef MRBEE
-		mrbeePoll();
-#endif
+		if(fatalError)
+		{
+			printf(VFDCOMMAND_CLEARHOME);
+			printf_P(fatalError);		
+		}
+
 		// Handle any packets that may have come in
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
 			
-		// FIXME: Do any module-specific behaviours here in the loop.
-		
-		if (decisecs >= update_decisecs && !(mrbusPktQueueFull(&mrbusTxQueue)))
+		if (decisecs >= 20 && !(mrbusPktQueueFull(&mrbusTxQueue)))
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
 
@@ -1142,20 +1144,9 @@ uint8_t pkt_count = 0;
 		if (mrbusPktQueueDepth(&mrbusTxQueue))
 		{
 			uint8_t fail = mrbusTransmit();
-
-			// If we're here, we failed to start transmission due to somebody else transmitting
-			// Given that our transmit buffer is full, priority one should be getting that data onto
-			// the bus so we can start using our tx buffer again.  So we stay in the while loop, trying
-			// to get bus time.
-
-			// We want to wait 20ms before we try a retransmit to avoid hammering the bus
-			// Because MRBus has a minimum packet size of 6 bytes @ 57.6kbps,
-			// need to check roughly every millisecond to see if we have a new packet
-			// so that we don't miss things we're receiving while waiting to transmit
 			if (fail)
 			{
 
-#ifndef MRBEE
 				uint8_t bus_countdown = 20;
 				while (bus_countdown-- > 0 && !mrbusIsBusIdle())
 				{
@@ -1164,7 +1155,6 @@ uint8_t pkt_count = 0;
 					if (mrbusPktQueueDepth(&mrbusRxQueue))
 						PktHandler();
 				}
-#endif
 			}
 		}
 	}
