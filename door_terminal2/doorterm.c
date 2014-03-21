@@ -82,7 +82,8 @@ uint32_t master_key_salt;
 
 //doesn't change
 #define RDP_SEQ_N 16 //size of the packet type allocation for mrbus. 
-#define RDP_DATA_TAG_SIZE 5
+#define RDP_DATA_TAG_SIZE 5 // see RDP_MAX_SIG_FAILS
+#define RDP_MAX_SIG_FAILS 4 //up to 8 fails (this number per side) at a tag size of 40 bits gives 21.7 years average to slip a packet in undetected at 200 packets per second bus saturation
 #define RDP_MAX_CONTROL_PKT_SIZE 100
 #if RDP_RECV_OVERLOAD > 8
 #error buffer too big. limited by RDP_SEQ_N and bits in recvMarkers
@@ -523,7 +524,14 @@ PktIgnore:
 			c->eax_nonce[2] = pktNum|0X8000;
 			//verify pkt and decrypt
 			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 6, rxBuffer+8, rxBuffer[MRBUS_PKT_LEN]-8))
+			{
+FailedSig:
+				//failed sig.
+				lprint("SigFail");
+				if (++c->failedPkts>RDP_MAX_SIG_FAILS)
+					nukesessionkey;
 				goto PktIgnore;
+			}
 			//ok, ack recvd pktNum, flags in rxBuffer[8].
 		}
 		else
@@ -535,7 +543,7 @@ PktIgnore:
 			c->eax_nonce[2] = pktNum;
 			//verify pkt and decrypt
 			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+6, RDP_DATA_TAG_SIZE, (uint8_t*)c->eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
-				goto PktIgnore;
+				goto FailedSig;
 
 			uint8_t sz=rxBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE;
 			//ok, data recvd pktNum, in rxBuffer+6, size sz
