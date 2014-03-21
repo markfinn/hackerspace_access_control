@@ -133,6 +133,7 @@ uint8_t sendOverload;
 uint16_t sendPktCounter;
 RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
 
+uint8_t failedPkts;
 uint16_t recvPktCounter;
 #if RDP_RECV_OVERLOAD > 1
 uint16_t recvPktFirstMissing;
@@ -527,7 +528,7 @@ PktIgnore:
 			{
 FailedSig:
 				//failed sig.
-				lprint("SigFail");
+				lprintW("SigFail");
 				if (++c->failedPkts>RDP_MAX_SIG_FAILS)
 					nukesessionkey;
 				goto PktIgnore;
