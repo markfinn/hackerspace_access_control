@@ -82,6 +82,7 @@ uint32_t master_key_salt;
 
 //doesn't change
 #define RDP_SEQ_N 16 //size of the packet type allocation for mrbus. 
+#define RDP_TIMEOUT 1
 #define RDP_DATA_TAG_SIZE 5 // see RDP_MAX_SIG_FAILS
 #define RDP_MAX_SIG_FAILS 4 //up to 8 fails (this number per side) at a tag size of 40 bits gives 21.7 years average to slip a packet in undetected at 200 packets per second bus saturation
 #define RDP_MAX_CONTROL_PKT_SIZE 100
@@ -141,6 +142,7 @@ uint8_t recvMarkers;
 uint8_t recvBuffer[RDP_RECV_PKT_BUFFER_SIZE];
 uint8_t recvBufferCount;
 #endif
+uint8_t timer;
 } client_t; 
 
 #define MAXCLIENTS 1
@@ -150,7 +152,7 @@ client_t clients[MAXCLIENTS];
 
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
-typedef enum {VFD_NEEDSTARTTIMEOUT, VFD_BUSYWAIT, VFD_OK} VFDstate_t;
+typedef enum {VFD_NEEDSTARTTIMEOUT, VFD_BUSYWAIT, VFD_OK, VFD_SEEMSSTUCK} VFDstate_t;
 typedef enum {NFC_POLL, NFC_WRITE, NFC_READ} NFCstate_t;
 
 typedef struct {
@@ -168,7 +170,7 @@ SPIStates_t SPIState;
 VFD_RingBuffer VFD_ringBuffer;
 
 
-volatile uint16_t secs;
+volatile uint16_t deciSecs;
 volatile uint16_t ticks50khz;
 
 
@@ -184,7 +186,7 @@ void initialize50kHzTimer(void)
 
 uint8_t vfdtrysend()
 {
-	if(SPIState.VFD_state == VFD_BUSYWAIT && SPIState.VFD_timer == 0 && 0==(PIND&(1<<VFD_BUSY)))
+	if((SPIState.VFD_state == VFD_BUSYWAIT || SPIState.VFD_state == VFD_SEEMSSTUCK) && SPIState.VFD_timer == 0 && 0==(PIND&(1<<VFD_BUSY)))
 		SPIState.VFD_state = VFD_OK;
 
 	if (SPIState.VFD_state == VFD_OK && VFD_ringBufferDepth(&VFD_ringBuffer))
@@ -202,12 +204,12 @@ uint8_t vfdtrysend()
 
 ISR(TIMER0_COMPA_vect)
 {
-	static uint8_t next=0;
+	static uint16_t next=0;
 	ticks50khz++;
-	if(ticks50khz>>8==next)
+	if(ticks50khz==next)
 	{
-		secs++;//00.16%.  good enough.  about 2.3 minutes per day
-		next+=195;
+		deciSecs++;
+		next+=5000;
 	}
 	if (SPIState.VFD_timer)
 	{
@@ -217,6 +219,22 @@ ISR(TIMER0_COMPA_vect)
 	}		
 }
 
+void marktime(client_t *c)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	{
+		c->timer=deciSecs;
+	}
+}
+uint8_t elapsedtime(client_t *c)
+{
+	uint16_t t;
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	{
+		t=deciSecs;
+	}
+	return t-c->timer;
+}
 
 ISR(PCINT2_vect)
 {
@@ -262,14 +280,33 @@ static int log_getchar(FILE *stream)
 }
 static int vfd_putchar(char c, FILE *stream)
 {
-
 	if (c==0x0a)//lf into crlf
 		vfd_putchar(0x0d, stream);
-	VFD_ringBufferPushBlocking(&VFD_ringBuffer, c);
+	uint16_t start, elapsed;
+	uint8_t res=0;
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
 	{
-		if(0==(SPCR & (1<<SPIE)))
-				vfdtrysend();
+		start = ticks50khz;
+	}
+	do
+	{
+		res=VFD_ringBufferPushNonBlocking(&VFD_ringBuffer, c);
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+		elapsed = ticks50khz - start;
+		}
+	}while(res==0 && elapsed < 4000);
+	if(res==0)
+	{
+		SPIState.VFD_state = VFD_SEEMSSTUCK;
+	}
+	else
+	{
+		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+		{
+			if(0==(SPCR & (1<<SPIE)))
+					vfdtrysend();
+		}
 	}
 	return 0;
 }
@@ -277,9 +314,102 @@ static int vfd_putchar(char c, FILE *stream)
 static FILE log_str = FDEV_SETUP_STREAM(log_putchar, log_getchar, _FDEV_SETUP_RW);
 static FILE vfd_str = FDEV_SETUP_STREAM(vfd_putchar, NULL, _FDEV_SETUP_WRITE);
 
+void nukesessionkey()
+{
+//set the key to unusable, start negotiation of a new one if it isn't already in progress
+
+}
+
+
+/*
+agree on next master nonce int
+the one that wants the larger nonce proves
+- send cmac(cmac(aes(nonce(int,0), int)
+- sender invalidates that int for future use
+- starts timer to disallow more than 1 start per sec average (5 burst?)
+if ok, other one sends proof
+- send cmac(aes(nonce(int,0), int)
+- sender invalidates that int for future use
+if ok, each uses aes(nonce(int,1) and aes(nonce(int,2)
+*/
+
+uint16_t masterSaltGetNext(uint16_t salt, uint8_t remote_addr)
+{
+	//zero is bad
+	if (salt==0)
+	{
+		//other end tried to use an invalid salt.
+		clprintE("remote %d attempted 0 master salt", remote_addr);
+		return 0;
+	}
+	uint16_t s = 1+eeprom_read_word((const uint16_t*)EE_MASTER_SALT);
+	if (s!=0)
+	{
+		salt = max(salt, s);
+
+		eeprom_write_word((uint16_t*)EE_MASTER_SALT, salt);
+		if(eeprom_read_word((const uint16_t*)EE_MASTER_SALT) == salt)
+		{
+			if(salt > 32768)
+				clprintW("master salt at %d%%", salt/328);
+			return salt;
+		}
+	}
+	//eeprom seems to have gone bad or the salt is run out
+	clprintE("master salt overused");
+	fatalError = PSTR("master salt overused");
+	return 0;
+}
+
+void keySetup(client_t *c, uint8_t remote_addr, uint16_t negotiated_salt)
+{
+//worst key derivation function eva!!!
+//replace later
+	uint8_t buf[16];
+	aes128_ctx_t client_aes_ctx;
+
+	memset(c, 0, sizeof(client_t));
+	c->addr = remote_addr;
+	c->maxpktsize=20;
+
+
+	memset(buf+5, 0, 16-5);
+	buf[0] = negotiated_salt;
+	buf[1] = negotiated_salt>>8;
+	buf[2] = min(mrbus_dev_addr, remote_addr);
+	buf[3] = max(mrbus_dev_addr, remote_addr);
+	buf[4] = 1;
+	aes128_enc(buf, &master_aes_ctx);
+	aes128_init(buf, &client_aes_ctx);
+	cmac_aes_init(&client_aes_ctx, &c->cmac_ctx);
+
+	memset(buf+5, 0, 16-5);
+	buf[0] = negotiated_salt;
+	buf[1] = negotiated_salt>>8;
+	buf[2] = min(mrbus_dev_addr, remote_addr);
+	buf[3] = max(mrbus_dev_addr, remote_addr);
+	buf[4] = 2;
+	aes128_enc(buf, &master_aes_ctx);
+	memcpy(c->eax_nonce, buf, 4);
+	
+	marktime(c);
+
+}
+
+
 void RDP_USER_DATA_RECV(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
 {
-//todo
+	switch(channel)
+	{
+	case 1:	
+		while(len)
+		{
+			vfd_putchar(*data, NULL);
+			len--;
+			data++;
+		}
+		break;
+	}
 }
 
 
@@ -319,12 +449,13 @@ void RDP_ACK(client_t *c, uint16_t pktNum, uint8_t code)
 	hbuf[1] = txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 	hbuf[0] = txBuffer[MRBUS_PKT_DEST] = c->addr;
 	hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+3+8;
-	hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = 16+1-128;
-	*(uint16_t*)(hbuf+4) = *(uint16_t*)(txBuffer+6) = pktNum; 
-	txBuffer[8] = code;
+	hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+	hbuf[4] = txBuffer[6] = 0;//ack
+	*(uint16_t*)(hbuf+5) = *(uint16_t*)(txBuffer+7) = pktNum; 
+	txBuffer[9] = code;
 	c->eax_nonce[2] = pktNum|0X8000;
 	//encrypt
-	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 6, txBuffer+8, txBuffer[MRBUS_PKT_LEN]-8-8);
+	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 7, txBuffer+9, 1);
 	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 
 }
@@ -496,48 +627,77 @@ PktIgnore:
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
-	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128) 
-	{
-		//secure channel packet ack
-	}
 	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] < RDP_SEQ_N+1-128) 
 	{
 		//secure channel packet
 		client_t *c=clients;
-		for (uint8_t i=0;i<MAXCLIENTS; i++, c++)
+		uint8_t i;
+		for (i=0;i<MAXCLIENTS; i++, c++)
 			if(c->addr==rxBuffer[MRBUS_PKT_SRC])
 				break;
-		if(c>=clients+MAXCLIENTS)
-			goto PktIgnore;
+		if(i>=MAXCLIENTS)
+		{
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[6]==0)
+			{
+				//startup
+				for (i=0, c=clients;i<MAXCLIENTS; i++, c++)
+					if(c->addr==0)
+						break;
+				if(i>=MAXCLIENTS)
+					goto PktIgnore;
+
+				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
+
+				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+				txBuffer[MRBUS_PKT_LEN] = 8;
+				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+				txBuffer[6]  = 0;
+				txBuffer[7]  = 1;
+				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+				goto PktIgnore;
+			}
+			else
+				goto PktIgnore;
+		}
 		uint8_t hbuf[6];
 		hbuf[0] = rxBuffer[MRBUS_PKT_DEST];
 		hbuf[1] = rxBuffer[MRBUS_PKT_SRC];
 		hbuf[2] = rxBuffer[MRBUS_PKT_LEN];
 		hbuf[3] = rxBuffer[MRBUS_PKT_TYPE];
-		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == 16+1-128) 
-		{//ack
-			if (rxBuffer[MRBUS_PKT_LEN] <6+3)//too short?
-				goto PktIgnore;
-			uint16_t pktNum = *(uint16_t*)(rxBuffer+6); 
-			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
-				goto PktIgnore;
-			*(uint16_t*)(hbuf+4) = pktNum;
-			c->eax_nonce[2] = pktNum|0X8000;
-			//verify pkt and decrypt
-			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 6, rxBuffer+8, rxBuffer[MRBUS_PKT_LEN]-8))
-			{
-FailedSig:
-				//failed sig.
-				lprintW("SigFail");
-				if (++c->failedPkts>RDP_MAX_SIG_FAILS)
-					nukesessionkey;
-				goto PktIgnore;
+		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128) 
+		{
+			if(rxBuffer[6]!=0)
+			{//setup
+				//todo
 			}
-			//ok, ack recvd pktNum, flags in rxBuffer[8].
+			else
+			{//ack
+				if (rxBuffer[MRBUS_PKT_LEN] < 6+1+2+1+8)
+					goto PktIgnore;
+				hbuf[4] = rxBuffer[6];//type
+				uint16_t pktNum = *(uint16_t*)(rxBuffer+7); 
+				if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
+					goto PktIgnore;
+				*(uint16_t*)(hbuf+5) = pktNum;
+				c->eax_nonce[2] = pktNum|0X8000;
+				//verify pkt and decrypt
+				if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+9, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 7, rxBuffer+9, rxBuffer[MRBUS_PKT_LEN]-9))
+				{
+	FailedSig:
+					//failed sig.
+					clprintW("SigFail");
+					if (++c->failedPkts>RDP_MAX_SIG_FAILS)
+						nukesessionkey();
+					goto PktIgnore;
+				}
+				marktime(c);
+				//ok, ack recvd pktNum, flags in rxBuffer[9].
+			}
 		}
 		else
 		{
-			int8_t seqNum = rxBuffer[MRBUS_PKT_TYPE]&0xF;
+			int8_t seqNum = rxBuffer[MRBUS_PKT_TYPE]%RDP_SEQ_N;
 			uint16_t pktNum = ((seqNum-((c->recvPktCounter&(RDP_RECV_OVERLOAD*2-1))-RDP_RECV_OVERLOAD)-1)&(RDP_RECV_OVERLOAD*2-1))+1+c->recvPktCounter-RDP_RECV_OVERLOAD;//some magic here from clientPktCounter and seqNum; 
 			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
 				goto PktIgnore;
@@ -563,6 +723,7 @@ FailedSig:
 				goto PktIgnore;
 			}
 			
+			marktime(c);
 			RDP_buffer_slot_t *p = (void*)(c->recvBuffer+c->recvBufferCount); 
 			int8_t x = pktNum-c->recvPktFirstMissing;
 
@@ -611,69 +772,6 @@ FailedSig:
 }
 
 
-
-uint16_t masterSaltGetNext(uint16_t salt, uint8_t remote_addr)
-{
-	//zero is bad
-	if (salt==0)
-	{
-		//other end tried to use an invalid salt.
-		lprintE("remote %d attempted 0 master salt", remote_addr);
-		return 0;
-	}
-	uint16_t s = 1+eeprom_read_word((const uint16_t*)EE_MASTER_SALT);
-	if (s!=0)
-	{
-		salt = max(salt, s);
-
-		eeprom_write_word((uint16_t*)EE_MASTER_SALT, salt);
-		if(eeprom_read_word((const uint16_t*)EE_MASTER_SALT) == salt)
-		{
-			if(salt > 32768)
-				lprintW("master salt at %d%%", salt/328);
-			return salt;
-		}
-	}
-	//eeprom seems to have gone bad or the salt is run out
-	lprintE("master salt overused");
-	fatalError = PSTR("master salt overused");
-	return 0;
-}
-
-void keySetup(client_t *c, uint8_t remote_addr, uint16_t negotiated_salt)
-{
-//worst key derivation function eva!!!
-//replace later
-	uint8_t buf[16];
-	aes128_ctx_t client_aes_ctx;
-
-	memset(c, 0, sizeof(client_t));
-	c->addr = remote_addr;
-	c->maxpktsize=20;
-
-
-	memset(buf+5, 0, 16-5);
-	buf[0] = negotiated_salt;
-	buf[1] = negotiated_salt>>8;
-	buf[2] = min(mrbus_dev_addr, remote_addr);
-	buf[3] = max(mrbus_dev_addr, remote_addr);
-	buf[4] = 1;
-	aes128_enc(buf, &master_aes_ctx);
-	aes128_init(buf, &client_aes_ctx);
-	cmac_aes_init(&client_aes_ctx, &c->cmac_ctx);
-
-	memset(buf+5, 0, 16-5);
-	buf[0] = negotiated_salt;
-	buf[1] = negotiated_salt>>8;
-	buf[2] = min(mrbus_dev_addr, remote_addr);
-	buf[3] = max(mrbus_dev_addr, remote_addr);
-	buf[4] = 2;
-	aes128_enc(buf, &master_aes_ctx);
-	memcpy(c->eax_nonce, buf, 4);
-	
-}
-
-
 void init(void)
 {
 	//set all pins to input with pull ups..
@@ -709,23 +807,11 @@ void init(void)
 	PCMSK2 = 1<<VFD_BUSY;
 	PCICR = 1<<PCIE2;
 
-/*
-// Uncomment this block to set up the ADC to continuously monitor the bus voltage using a 3:1 divider tied into the ADC7 input
-// You also need to uncomment the ADC ISR near the top of the file
-	// Setup ADC
-	ADMUX  = 0x47;  // AVCC reference; ADC7 input
-	ADCSRA = _BV(ADATE) | _BV(ADIF) | _BV(ADPS2) | _BV(ADPS1); // 128 prescaler
-	ADCSRB = 0x00;
-	DIDR0  = 0x00;  // No digitals were harmed in the making of this ADC
-
-	busVoltage = 0;
-	ADCSRA |= _BV(ADEN) | _BV(ADSC) | _BV(ADIE) | _BV(ADIF);
-*/
 
 	VFD_ringBufferInitialize(&VFD_ringBuffer);
 	SPIState = (SPIStates_t){SPI_VFD, VFD_BUSYWAIT, NFC_POLL, 10};
 
-	secs=0;
+	deciSecs=0;
 	ticks50khz=0;
 
 
@@ -739,7 +825,7 @@ void init(void)
 
 	initialize50kHzTimer();
 
-	printf(VFDCOMMAND_INITIALIZE "Startup: Init");
+	cvprintf(VFDCOMMAND_INITIALIZE "Startup: Init");
 
 	// Initialize MRBus core
 	mrbusPktQueueInitialize(&mrbusTxQueue, mrbusTxPktBufferArray, MRBUS_TX_BUFFER_DEPTH);
@@ -778,7 +864,7 @@ uint8_t pkt_count = 0;
 	// Application initialization
 	init();
 
-	printf(VFDCOMMAND_CLEARHOME "Startup: Main Loop Top");
+	cvprintf(VFDCOMMAND_CLEARHOME "Startup: Main Loop Top");
 
 
 	while (1)
@@ -787,14 +873,18 @@ uint8_t pkt_count = 0;
 
 		if(fatalError)
 		{
-			printf(VFDCOMMAND_CLEARHOME);
+			cvprintf(VFDCOMMAND_CLEARHOME);
 			printf_P(fatalError);		
 		}
 
 		// Handle any packets that may have come in
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
-			
+
+		if (mrbusPktQueueDepth(&mrbusTxQueue))
+			mrbusTransmit();
+
+/*			
 		if (secs >= 2 && !(mrbusPktQueueFull(&mrbusTxQueue)))
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
@@ -810,23 +900,7 @@ uint8_t pkt_count = 0;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 			secs = 0;
 		}	
-
-		if (mrbusPktQueueDepth(&mrbusTxQueue))
-		{
-			uint8_t fail = mrbusTransmit();
-			if (fail)
-			{
-
-				uint8_t bus_countdown = 20;
-				while (bus_countdown-- > 0 && !mrbusIsBusIdle())
-				{
-					wdt_reset();
-					_delay_ms(1);
-					if (mrbusPktQueueDepth(&mrbusRxQueue))
-						PktHandler();
-				}
-			}
-		}
+*/
 	}
 }
 

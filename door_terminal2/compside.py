@@ -3,7 +3,7 @@ from Crypto.Cipher import AES
 import argparse
 import os
 import aes_eax
-
+import threading
 
 
 sys.path.insert(0, '../../mrbus_bootloader')
@@ -25,6 +25,84 @@ def intargparse(arg):
     return int(arg[2:], 16)
   else:
     return int(arg)
+
+
+
+
+
+
+
+
+
+
+class RDP(object):
+  RDP_SEQ_N=16
+  class RDP_Connection():
+    #STATE_CLOSED     = 0  not used here. handled as connection dictionary entry for that address being None
+    #STATE_LISTEN     = 1  not used here. handled in protocol, not connection
+    STATE_SYN_SENT   = 2
+    STATE_SYN_RCVD   = 3
+    STATE_OPEN       = 4
+    STATE_CLOSE_WAIT = 5
+
+    def __init__(self, active=False):
+      if active:
+        self.state = self.STATE_SYN_SENT
+      else:
+        self.state = self.STATE_SYN_RCVD
+    
+  def __init__(self, node):
+
+    def _handler(p):
+      if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
+        print p
+        return True #eat packet
+    def runner():
+      while self.run:
+        self.node.pump(1)
+
+
+    self.node = node
+    self.connections = {}
+    self.hint=node.install(_handler)
+    self.listening=False
+
+    self.run=True
+    self.thread = threading.Thread(group=None, target=runner, name='RDPPump')
+    self.thread.start()
+    self.sendbuf=[]
+
+  def __dell__(self):
+    self.node.remove(self.hint)
+    self.run=False
+    self.thread.join()
+
+
+  def stop(self):
+    self.run=False
+    
+  def listen(self):
+    self.listening=True
+    
+  def open(self, dest):
+    assert dest not in self.connections
+    self.connections[dest] = self.RDP_Connection(True)
+    self.node.sendpkt([self.RDP_SEQ_N-128, 0])
+
+  def send(self, channel, data):
+    assert channel < 16
+    assert len(data) <= 0xfff
+    self.sendbuf += [(channel<<12) | (len(data)>>8), len(data)&0xff] + data
+    
+
+
+class doorterm(RDP):
+  def __init__(self, node):
+    super(doorterm, self).__init__(node)
+
+  def putScreen(self, s):
+    self.send(1, [ord(c) for c in s])
+
 
 
 if __name__ == '__main__':
@@ -49,7 +127,7 @@ if __name__ == '__main__':
       sys.exit(1)
     args.port='/dev/'+args.port[0]
   
-  mrb = mrbus.mrbus(args.port, addr=args.addr_host)#, logall=True, logfile=sys.stdout, extra=True)
+  mrb = mrbus.mrbus(args.port, addr=args.addr_host, logall=True, logfile=sys.stdout, extra=True)
 
   def debughandler(p):
     if p.cmd==ord('*'):
@@ -72,7 +150,16 @@ if __name__ == '__main__':
 
   node = mrb.getnode(args.addr)
 
+  dt=doorterm(node)
+  try:
+    dt.open(2)
+    dt.putScreen('hi')
 
+    while 1:
+      pass
+  except:
+    pass
+  dt.stop()
 
 #  print node.cmp.isSupported(timeout=200)
 
@@ -106,27 +193,24 @@ if __name__ == '__main__':
 
 #############################
 #EAX enc TEST
-
-  nonce=[1]
-  nl=len(nonce)
-  head=[1,2]
-  hl=len(head)
-  data=[2,3,4]
-  dl=len(data)
-
-  assert nl<16 and hl < 16 and dl < 16 and nl+hl+dl <= 13
-
-  print hex(aes_eax.intfrombytes(data))
-
-  node.pumpout()
-  node.sendpkt(['3']+[(hl<<4)|nl]+nonce+head+data)
-  r = node.gettypefilteredpktdata('4')
-  print map(hex, r)
-  print hex(aes_eax.aead_eax_aes_dec(aes_eax.intfromstr(key), aes_eax.intfrombytes(nonce), nl, aes_eax.intfrombytes(head), hl, aes_eax.intfrombytes(r), len(r), 3))
-
-
-
-
+#
+#  nonce=[1]
+#  nl=len(nonce)
+#  head=[1,2]
+#  hl=len(head)
+#  data=[2,3,4]
+#  dl=len(data)
+#
+#  assert nl<16 and hl < 16 and dl < 16 and nl+hl+dl <= 13
+#
+#  print hex(aes_eax.intfrombytes(data))
+#
+#  node.pumpout()
+#  node.sendpkt(['3']+[(hl<<4)|nl]+nonce+head+data)
+#  r = node.gettypefilteredpktdata('4')
+#  print map(hex, r)
+#  print hex(aes_eax.aead_eax_aes_dec(aes_eax.intfromstr(key), aes_eax.intfrombytes(nonce), nl, aes_eax.intfrombytes(head), hl, aes_eax.intfrombytes(r), len(r), 3))
+#
 #############################
 
 

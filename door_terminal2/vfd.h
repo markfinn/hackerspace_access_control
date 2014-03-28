@@ -1,7 +1,7 @@
-#define printf(format, ...) printf_P (PSTR(format), ##__VA_ARGS__)
-#define lprintf(format, ...) fprintf_P (stderr, PSTR(format), ##__VA_ARGS__)
-#define lprintE(format, ...) lprintf ("E:" format "\n", ##__VA_ARGS__)
-#define lprintW(format, ...) lprintf ("W:" format "\n", ##__VA_ARGS__)
+#define cvprintf(format, ...) printf_P (PSTR(format), ##__VA_ARGS__)
+#define clprintf(format, ...) fprintf_P (stderr, PSTR(format), ##__VA_ARGS__)
+#define clprintE(format, ...) clprintf ("E:" format "\n", ##__VA_ARGS__)
+#define clprintW(format, ...) clprintf ("W:" format "\n", ##__VA_ARGS__)
 #if DEBUGPRINT == VFD
 #define printD(format, ...) do{lprintf ("D:" format "\n", ##__VA_ARGS__); printf ("D:" (format), ##__VA_ARGS__); }while(0)
 #elif defined DEBUGPRINT

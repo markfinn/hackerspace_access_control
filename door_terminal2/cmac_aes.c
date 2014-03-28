@@ -39,8 +39,8 @@ void cmac_aes_init(aes128_ctx_t* key_ctx, cmac_aes_ctx_t* cmac_ctx)
 	cmac_ctx->key_ctx = key_ctx;
 	memset(cmac_ctx->k2, 0, 16);
 	aes128_enc(cmac_ctx->k2, cmac_ctx->key_ctx);
-  cmac_double(cmac_ctx->k1, cmac_ctx->k2);
-  cmac_double(cmac_ctx->k2, cmac_ctx->k1);
+	cmac_double(cmac_ctx->k1, cmac_ctx->k2);
+	cmac_double(cmac_ctx->k2, cmac_ctx->k1);
 }
 
 void  cmac_aes_noclear(cmac_aes_ctx_t* cmac_ctx, uint8_t *out, uint8_t *data, uint16_t sz)
