@@ -123,8 +123,11 @@ typedef struct {
 
 #define ct_assert(e) ((void)sizeof(char[1 - 2*!(e)]))
 
+typedef enum {RDP_SYN_RCVD} RDP_STATE_t;
+
 typedef struct {
 uint8_t addr;
+RDP_STATE_t state : 4;
 uint8_t maxpktsize;
 
 cmac_aes_ctx_t cmac_ctx;
@@ -637,17 +640,20 @@ PktIgnore:
 				break;
 		if(i>=MAXCLIENTS)
 		{
-			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[6]==0)
-			{
-				//startup
-				for (i=0, c=clients;i<MAXCLIENTS; i++, c++)
-					if(c->addr==0)
-						break;
-				if(i>=MAXCLIENTS)
-					goto PktIgnore;
+			for (i=0, c=clients;i<MAXCLIENTS; i++, c++)
+				if(c->addr==0)
+					break;
+			if(i>=MAXCLIENTS)
+				goto PktIgnore;
 
+			//we don't have a conversation with this client, and we have an open slot
+			//startup. equiventent to the listen state in RUDP
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 8 && rxBuffer[6]==0 && rxBuffer[7]==0)
+			{
+				//syn recvd
 				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
 
+				//send syn,ack
 				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 				txBuffer[MRBUS_PKT_LEN] = 8;
@@ -655,6 +661,26 @@ PktIgnore:
 				txBuffer[6]  = 0;
 				txBuffer[7]  = 1;
 				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+
+				c->state = RDP_SYN_RCVD;
+				marktime(c);
+				goto PktIgnore;
+			}
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 8 && rxBuffer[6]==0 && rxBuffer[7]==0)
+			{
+				//syn recvd
+				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
+
+				//send syn,ack
+				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+				txBuffer[MRBUS_PKT_LEN] = 8;
+				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+				txBuffer[6]  = 0;
+				txBuffer[7]  = 1;
+				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+
+				c->state = RDP_SYN_RCVD;
 				goto PktIgnore;
 			}
 			else
