@@ -1,3 +1,5 @@
+//pressing 1 and 2 on keypad locks up.  wtf?
+
 /*************************************************************************
 Title:    MRBus Door Terminal
 Authors:  Mark Finn <mark@mfinn.net>
@@ -38,18 +40,27 @@ LICENSE:
 #include "eax_aes.h"
 #include "vfd.h"
 
-
+const char const KEYMAP[]  = {'*', '7', '4', '1', '0', '8', '5', '2', '#', '9', '6', '3'};
 
 uint8_t mrbus_dev_addr = 0;
 
  PGM_P fatalError = 0;
+ 
+ //Port B
+ #define KB_COLS               (const char[]){0, 1, 2}
+ #define KB_COLS_DDR          DDRB
+ #define KB_COLS_PORT          PORTB
+ #define MOSI                  3
+ #define MISO                  4
+ #define SCK                   5
+ 
+ //port C
+ #define KB_ROWS_N             4
+ #define KB_ROWS_SHIFT         2
+ #define KB_ROWS_PIN          PINC
 
-//Port B
-#define MOSI                  3
-#define MISO                  4
-#define SCK                   5
 
-//port D
+ //port D
 #define NFC_SS                4
 #define VFD_RESET__NFC_WAKE   5
 #define VFD_SS                6
@@ -152,6 +163,13 @@ uint8_t timer;
 client_t clients[MAXCLIENTS];
 
 
+#define RING_BUFFER_SZ 8
+#define RING_BUFFER_NAME KBD_
+#include"../libs/avr-ringbuffer/avr-ringbuffer.h"
+#undef RING_BUFFER_SZ
+#undef RING_BUFFER_NAME
+KBD_RingBuffer KBD_ringBuffer;
+
 
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
@@ -176,6 +194,15 @@ VFD_RingBuffer VFD_ringBuffer;
 volatile uint16_t deciSecs;
 volatile uint16_t ticks50khz;
 
+void reset(void)
+{
+		cli();
+		wdt_reset();
+		MCUSR &= ~(_BV(WDRF));
+		WDTCSR |= _BV(WDE) | _BV(WDCE);
+		WDTCSR = _BV(WDE);
+		while(1);  // Force a watchdog reset
+}
 
 void initialize50kHzTimer(void)
 {
@@ -205,14 +232,84 @@ uint8_t vfdtrysend()
 	return 0;
 }
 
+uint16_t KEYBDSTATE=0;
+
+void keycodeInsert(unsigned char scancode)
+{
+	KBD_ringBufferPushNonBlocking(&KBD_ringBuffer, KEYMAP[scancode]);
+}
+
 ISR(TIMER0_COMPA_vect)
 {
 	static uint16_t next=0;
+	static uint8_t centiSecs=0;
+	static uint8_t kbd_state=0;
+	static uint16_t KEYBDSTATE=0;
+	static uint16_t KEYBDPREVSTATE=0;
+	static uint8_t KEYBDREPTSTATE=0xff;//nothing pressed, no current key
+
 	ticks50khz++;
 	if(ticks50khz==next)
 	{
-		deciSecs++;
-		next+=5000;
+		centiSecs++;
+		next+=500;
+		if(centiSecs==10)
+		{
+			centiSecs=0;
+			deciSecs++;
+
+		}
+		if((kbd_state&1)==0)
+		{
+			KB_COLS_PORT=(KB_COLS_PORT|(1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2]))&~(1<<KB_COLS[kbd_state/2]);
+			KB_COLS_DDR =(KB_COLS_DDR&~((1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2])))|(1<<KB_COLS[kbd_state/2]);
+		}
+		else
+		{
+			KEYBDSTATE<<=KB_ROWS_N;
+			KEYBDSTATE |= (KB_ROWS_PIN>>KB_ROWS_SHIFT)&((1<<KB_ROWS_N)-1);
+		}
+		kbd_state++;
+		if(kbd_state>=6)
+		{
+			kbd_state=0;
+			KEYBDSTATE^=0xfff;
+
+			if ((0x230&KEYBDSTATE)==0x230)//reset on 0-8-9
+				reset();
+				
+			uint16_t delta=KEYBDPREVSTATE^KEYBDSTATE;
+
+			if (delta&KEYBDSTATE)
+			{//new key pressed
+				while(delta&KEYBDSTATE)
+				{
+					KEYBDREPTSTATE=__builtin_ctz(delta&KEYBDSTATE);
+					delta^=1<<KEYBDREPTSTATE;
+					keycodeInsert(KEYBDREPTSTATE);
+				}
+			}
+			else if (KEYBDREPTSTATE!=0xff && delta&(1<<(KEYBDREPTSTATE&0xf)))
+			{//old repeat key unpressed
+				KEYBDREPTSTATE=0xff;
+			}
+			else if (KEYBDREPTSTATE!=0xff)
+			{//advancing repeat timers
+				uint8_t t=1+(KEYBDREPTSTATE>>4);
+				if(t==11 || t==11+3)
+				{//start or continue repeat
+					keycodeInsert(KEYBDREPTSTATE&0xf);
+					if(t==11+3)
+					{//continue repeat
+						t=10;
+					}
+				}
+				KEYBDREPTSTATE=(t<<4)|(KEYBDREPTSTATE&0xf);
+			}
+
+			KEYBDPREVSTATE=KEYBDSTATE;
+			KEYBDSTATE=0;
+		}
 	}
 	if (SPIState.VFD_timer)
 	{
@@ -569,14 +666,7 @@ PktIgnore:
 	}
 	else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
-		// Reset
-		cli();
-		wdt_reset();
-		MCUSR &= ~(_BV(WDRF));
-		WDTCSR |= _BV(WDE) | _BV(WDCE);
-		WDTCSR = _BV(WDE);
-		while(1);  // Force a watchdog reset
-		sei();
+		reset();
 	}
 	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
@@ -834,6 +924,7 @@ void init(void)
 	PCICR = 1<<PCIE2;
 
 
+	KBD_ringBufferInitialize(&KBD_ringBuffer);
 	VFD_ringBufferInitialize(&VFD_ringBuffer);
 	SPIState = (SPIStates_t){SPI_VFD, VFD_BUSYWAIT, NFC_POLL, 10};
 
@@ -896,7 +987,14 @@ uint8_t pkt_count = 0;
 	while (1)
 	{
 		wdt_reset();
-
+/*
+		if (KBD_ringBufferDepth(&KBD_ringBuffer))
+		{
+			static int ctimer=0;
+			unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
+			cvprintf(VFDCOMMAND_CLEARHOME "k: %d %c", ctimer++, key);
+		}
+*/
 		if(fatalError)
 		{
 			cvprintf(VFDCOMMAND_CLEARHOME);

@@ -35,8 +35,8 @@ LICENSE:
 #define _RING_BUFFER_NAME  RING_BUFFER_NAME
 #endif
 
-#ifndef _AVR_RINGBUFFER_H_RING_BUFFER_NAME
-#define _AVR_RINGBUFFER_H_RING_BUFFER_NAME
+//#ifndef _AVR_RINGBUFFER_H ## _RING_BUFFER_NAME
+//#define _AVR_RINGBUFFER_H ## _RING_BUFFER_NAME
 
 //go crazy with nexted expansions to make the name work right.  Yay CPP tricks.
 #define _RING_BUFFER_NAMEIFY__(r, n) r ## n
@@ -121,7 +121,7 @@ uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopBlocking)(_RING_BUFFER_NAMEIFY(RingBuf
 }
 
 
-#endif
+//#endif
 
 #undef _RING_BUFFER_SZ
 #undef _RING_BUFFER_NAME
