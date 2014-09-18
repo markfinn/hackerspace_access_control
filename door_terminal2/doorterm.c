@@ -618,7 +618,6 @@ PktIgnore:
 	if ('W' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// EEPROM WRITE Packet
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_LEN] = 8;			
 		txBuffer[MRBUS_PKT_TYPE] = 'w';
 		eeprom_write_byte((uint8_t*)(uint16_t)rxBuffer[6], rxBuffer[7]);
@@ -626,6 +625,8 @@ PktIgnore:
 		txBuffer[7] = rxBuffer[7];
 		if (MRBUS_EE_DEVICE_ADDR == rxBuffer[6])
 			mrbus_dev_addr = eeprom_read_byte((uint8_t*)MRBUS_EE_DEVICE_ADDR);
+send:
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;	
@@ -633,20 +634,15 @@ PktIgnore:
 	else if ('R' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// EEPROM READ Packet
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		txBuffer[MRBUS_PKT_LEN] = 8;			
 		txBuffer[MRBUS_PKT_TYPE] = 'r';
 		txBuffer[6] = rxBuffer[6];
 		txBuffer[7] = eeprom_read_byte((uint8_t*)(uint16_t)rxBuffer[6]);			
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
+		goto send;
 	}
 	else if ('V' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// Version
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		txBuffer[MRBUS_PKT_LEN] = 18;
 		txBuffer[MRBUS_PKT_TYPE] = 'v';
 		txBuffer[6]  = 'N';
@@ -661,8 +657,7 @@ PktIgnore:
 		txBuffer[15]  = 0; // Software Revision
 		txBuffer[16]  = 0; // Hardware Major Revision
 		txBuffer[17]  = 0; // Hardware Minor Revision
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
+		goto send;
 	}
 	else if ('X' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
@@ -671,8 +666,6 @@ PktIgnore:
 	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// aes test
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		txBuffer[MRBUS_PKT_TYPE] = 'z';
 		uint8_t l = min(16, rxBuffer[MRBUS_PKT_LEN]-6);
 		uint8_t buf[16];
@@ -685,14 +678,11 @@ PktIgnore:
 		txBuffer[MRBUS_PKT_LEN] = l;
 		for(i=6;i<l;i++)
 		  txBuffer[i] = buf[i-6];
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
+		goto send;
 	}
 	else if ('1' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// omac test
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		txBuffer[MRBUS_PKT_TYPE] = '2';
 		txBuffer[MRBUS_PKT_LEN] = 20;
 		uint8_t l = rxBuffer[MRBUS_PKT_LEN]-6;
@@ -700,14 +690,11 @@ PktIgnore:
 		cmac_aes(&master_cmac_ctx, buf, rxBuffer+MRBUS_PKT_TYPE+1, l);
 		for(i=0;i<14;i++)
 		  txBuffer[i+6] = buf[i];
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
+		goto send;
 	}
 	else if ('3' == rxBuffer[MRBUS_PKT_TYPE]) 
 	{
 		// eax test
-		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		txBuffer[MRBUS_PKT_TYPE] = '4';
 		uint8_t nl = rxBuffer[6];
 		uint8_t hl = (nl>>4)&0xf;
@@ -717,8 +704,7 @@ PktIgnore:
 			dl=14-3;
 		eax_aes_enc(&master_cmac_ctx, txBuffer+6, 3, rxBuffer+7, nl, rxBuffer+7+nl, hl, rxBuffer+7+nl+hl, dl);
 		txBuffer[MRBUS_PKT_LEN] = 6+dl+3;
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-		goto PktIgnore;
+		goto send;
 	}
 	else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] < RDP_SEQ_N+1-128) 
 	{
@@ -734,8 +720,14 @@ PktIgnore:
 				if(c->addr==0)
 					break;
 			if(i>=MAXCLIENTS)
-				goto PktIgnore;
-
+			{
+				//no open connection slots. send a fail TODO what is a fail?
+				txBuffer[MRBUS_PKT_LEN] = 8;
+				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+				txBuffer[6]  = 0;
+				txBuffer[7]  = 1;
+				goto send;
+			}
 			//we don't have a conversation with this client, and we have an open slot
 			//startup. equiventent to the listen state in RUDP
 			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 8 && rxBuffer[6]==0 && rxBuffer[7]==0)
@@ -744,34 +736,13 @@ PktIgnore:
 				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
 
 				//send syn,ack
-				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 				txBuffer[MRBUS_PKT_LEN] = 8;
 				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
 				txBuffer[6]  = 0;
 				txBuffer[7]  = 1;
-				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-
 				c->state = RDP_SYN_RCVD;
 				marktime(c);
-				goto PktIgnore;
-			}
-			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 8 && rxBuffer[6]==0 && rxBuffer[7]==0)
-			{
-				//syn recvd
-				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
-
-				//send syn,ack
-				txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
-				txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-				txBuffer[MRBUS_PKT_LEN] = 8;
-				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
-				txBuffer[6]  = 0;
-				txBuffer[7]  = 1;
-				mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-
-				c->state = RDP_SYN_RCVD;
-				goto PktIgnore;
+				goto send;
 			}
 			else
 				goto PktIgnore;
@@ -969,7 +940,6 @@ void init(void)
 }
 
 
-
 int main(void)
 {
 ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, you have chosen buffer sizes that require you to change client_t.recvBufferCount to a uint16_t. I can't do it automatically since sizeof isn't available to the preprocessor
@@ -987,14 +957,34 @@ uint8_t pkt_count = 0;
 	while (1)
 	{
 		wdt_reset();
-/*
+
 		if (KBD_ringBufferDepth(&KBD_ringBuffer))
 		{
-			static int ctimer=0;
+			static unsigned int n=0;
 			unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
-			cvprintf(VFDCOMMAND_CLEARHOME "k: %d %c", ctimer++, key);
+			if(key=='*')
+			{
+				n=0;
+				cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
+			}
+			else if(key=='#')
+			{
+				if(n>200)
+					n=200;
+				char*x=malloc(n+1);
+				memset(x, 'x', n);
+				x[n]=0;
+				cvprintf(VFDCOMMAND_CLEARHOME "%s", x);
+				free(x);
+				n=0;
+			}
+			else
+			{
+				n=n*10+(key-'0');
+				cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
+			}
 		}
-*/
+
 		if(fatalError)
 		{
 			cvprintf(VFDCOMMAND_CLEARHOME);
