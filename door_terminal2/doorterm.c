@@ -1,5 +1,3 @@
-//pressing 1 and 2 on keypad locks up.  wtf?
-
 /*************************************************************************
 Title:    MRBus Door Terminal
 Authors:  Mark Finn <mark@mfinn.net>
@@ -40,16 +38,16 @@ LICENSE:
 #include "eax_aes.h"
 #include "vfd.h"
 
-const char const KEYMAP[]  = {'*', '7', '4', '1', '0', '8', '5', '2', '#', '9', '6', '3'};
+const char const KEYMAP[]  = {'#', '9', '6', '3', '0', '8', '5', '2', '*', '7', '4', '1'};
 
 uint8_t mrbus_dev_addr = 0;
 
  PGM_P fatalError = 0;
  
  //Port B
- #define KB_COLS               (const char[]){0, 1, 2}
- #define KB_COLS_DDR          DDRB
- #define KB_COLS_PORT          PORTB
+ #define NFC_SS                0
+ #define VFD_RESET__NFC_WAKE   1
+ #define SPI_SS_UNUSED         2
  #define MOSI                  3
  #define MISO                  4
  #define SCK                   5
@@ -61,10 +59,11 @@ uint8_t mrbus_dev_addr = 0;
 
 
  //port D
-#define NFC_SS                4
-#define VFD_RESET__NFC_WAKE   5
-#define VFD_SS                6
-#define VFD_BUSY              7 //also drives a pin change int23
+ #define KB_COLS              (const char[]){3, 4, 5}
+ #define KB_COLS_DDR          DDRD
+ #define KB_COLS_PORT         PORTD
+ #define VFD_SS                6
+ #define VFD_BUSY              7 //also drives a pin change int23
 
 
 #define MRBUS_TX_BUFFER_DEPTH 4
@@ -221,7 +220,7 @@ uint8_t vfdtrysend()
 
 	if (SPIState.VFD_state == VFD_OK && VFD_ringBufferDepth(&VFD_ringBuffer))
 	{
-		PORTD |= (1<<NFC_SS);
+		PORTB |= (1<<NFC_SS);
 		PORTD |= (1<<VFD_SS);
 		SPCR |= (1<<DORD);
 		SPIState.VFD_state=VFD_NEEDSTARTTIMEOUT;
@@ -360,7 +359,7 @@ ISR(SPI_STC_vect)
 /*	else if (NFC_ringBufferDepth(&NFCringBuffer))
 	{
 		PORTD &= ~(1<<VFD_SS);
-		PORTD &= ~(1<<NFC_SS);
+		PORTB &= ~(1<<NFC_SS);
 		SPCR &= ~(1<<DORD);
 		SPDR = NFC_ringBufferPop(&NFCringBuffer)
 		SPIState.SPI_sent = SPI_NFC;
@@ -868,8 +867,8 @@ void init(void)
 
 
 	// Set MOSI, SCK, SSs, and reset to output.  also set PB2, which is SPI SS. needs to be output for master mode to work.  mabe move one of our SSs here later 
-	DDRB = (1<<MOSI)|(1<<SCK)|(1<<2);
-	DDRD = (1<<NFC_SS)|(1<<VFD_SS)|(1<<VFD_RESET__NFC_WAKE);
+	DDRB = (1<<NFC_SS)|(1<<VFD_RESET__NFC_WAKE)|(1<<MOSI)|(1<<SCK)|(1<<SPI_SS_UNUSED);
+	DDRD = (1<<VFD_SS);
 	PORTD = ~(1<<VFD_SS);
 
 	// Enable SPI, Master, set clock rate fck/16, SPI mode 1,1
