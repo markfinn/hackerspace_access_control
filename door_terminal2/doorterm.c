@@ -231,33 +231,13 @@ uint8_t vfdtrysend()
 	return 0;
 }
 
-uint16_t KEYBDSTATE=0;
 
 void keycodeInsert(unsigned char scancode)
 {
 	KBD_ringBufferPushNonBlocking(&KBD_ringBuffer, KEYMAP[scancode]);
 }
-
-ISR(TIMER0_COMPA_vect)
+void keyboard_scan()
 {
-	static uint16_t next=0;
-	static uint8_t centiSecs=0;
-	static uint8_t kbd_state=0;
-	static uint16_t KEYBDSTATE=0;
-	static uint16_t KEYBDPREVSTATE=0;
-	static uint8_t KEYBDREPTSTATE=0xff;//nothing pressed, no current key
-
-	ticks50khz++;
-	if(ticks50khz==next)
-	{
-		centiSecs++;
-		next+=500;
-		if(centiSecs==10)
-		{
-			centiSecs=0;
-			deciSecs++;
-
-		}
 		if((kbd_state&1)==0)
 		{
 			KB_COLS_PORT=(KB_COLS_PORT|(1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2]))&~(1<<KB_COLS[kbd_state/2]);
@@ -309,6 +289,30 @@ ISR(TIMER0_COMPA_vect)
 			KEYBDPREVSTATE=KEYBDSTATE;
 			KEYBDSTATE=0;
 		}
+
+}
+
+ISR(TIMER0_COMPA_vect)
+{
+	static uint16_t next=0;
+	static uint8_t centiSecs=0;
+	static uint8_t kbd_state=0;
+	static uint16_t KEYBDSTATE=0;
+	static uint16_t KEYBDPREVSTATE=0;
+	static uint8_t KEYBDREPTSTATE=0xff;//nothing pressed, no current key
+
+	ticks50khz++;
+	if(ticks50khz==next)
+	{
+		centiSecs++;
+		next+=500;
+		if(centiSecs==10)
+		{
+			centiSecs=0;
+			deciSecs++;
+
+		}
+		keyboard_scan();
 	}
 	if (SPIState.VFD_timer)
 	{
@@ -371,10 +375,12 @@ ISR(SPI_STC_vect)
 
 static int log_putchar(char c, FILE *stream)
 {
+  //fill in once streams are working
 	return 0;
 }
 static int log_getchar(FILE *stream)
 {
+  //fill in once streams are working
 	return 0;
 }
 static int vfd_putchar(char c, FILE *stream)
@@ -422,7 +428,7 @@ void nukesessionkey()
 
 /*
 agree on next master nonce int
-the one that wants the larger nonce proves
+the one that wants the larger nonce proves 
 - send cmac(cmac(aes(nonce(int,0), int)
 - sender invalidates that int for future use
 - starts timer to disallow more than 1 start per sec average (5 burst?)
