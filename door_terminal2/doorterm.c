@@ -67,8 +67,8 @@ uint8_t mrbus_dev_addr = 0;
  #define VFD_BUSY              7 //also drives a pin change int23
 
 
-#define MRBUS_TX_BUFFER_DEPTH 4
-#define MRBUS_RX_BUFFER_DEPTH 4
+#define MRBUS_TX_BUFFER_DEPTH 1
+#define MRBUS_RX_BUFFER_DEPTH 3
 
 MRBusPacket mrbusTxPktBufferArray[MRBUS_TX_BUFFER_DEPTH];
 MRBusPacket mrbusRxPktBufferArray[MRBUS_RX_BUFFER_DEPTH];
@@ -161,6 +161,11 @@ uint8_t timer;
 
 #define MAXCLIENTS 1
 client_t clients[MAXCLIENTS];
+
+
+
+uint8_t RDPvsQueue=0;
+
 
 
 #define RING_BUFFER_SZ 8
@@ -598,6 +603,10 @@ void RDP_tx(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
 	}while(len);
 }
 
+uint8_t RDPTXneeded(void)
+{}
+uint8_t RDPTX()
+{}
 
 void PktHandler(void)
 {
@@ -975,26 +984,18 @@ uint8_t pkt_count = 0;
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
 
-		if (mrbusPktQueueDepth(&mrbusTxQueue))
-			mrbusTransmit();
-
-/*			
-		if (secs >= 2 && !(mrbusPktQueueFull(&mrbusTxQueue)))
+		// Handle any packets outgoing packets in the simple queue or in the RDP sender. if both want to send, use the RDPvsQueue flag to round-robbin them
+		if (RDPTXneeded() && (RDPvsQueue || 0==mrbusPktQueueDepth(&mrbusTxQueue)))
 		{
-			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
+			if (!RDPTX())
+				RDPvsQueue=0;
+		}
+		else if (mrbusPktQueueDepth(&mrbusTxQueue))
+		{
+			if (!mrbusTransmit())
+				RDPvsQueue=1;
+		}
 
-//			printf("pkt_count %d\n", pkt_count);
-			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-			txBuffer[MRBUS_PKT_DEST] = 0xFF;
-			txBuffer[MRBUS_PKT_LEN] = 9;
-			txBuffer[5] = 'S';
-			txBuffer[6] = 'h';
-			txBuffer[7] = 'i';
-			txBuffer[8] = pkt_count++;
-			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-			secs = 0;
-		}	
-*/
 	}
 }
 

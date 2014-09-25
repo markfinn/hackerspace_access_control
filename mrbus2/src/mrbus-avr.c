@@ -212,11 +212,6 @@ uint8_t mrbusTxActive()
 
 uint8_t mrbusTransmit(void)
 {
-	uint8_t status;
-	uint8_t address;
-	uint8_t i;
-	uint16_t crc16 = 0x0000;
-
 	if (mrbusPktQueueEmpty(&mrbusTxQueue))
 		return(0);
 
@@ -226,14 +221,32 @@ uint8_t mrbusTransmit(void)
 
 	mrbusPktQueuePeek(&mrbusTxQueue, (uint8_t*)mrbusTxBuffer, sizeof(mrbusTxBuffer));
 
+	if(mrbusTransmitSingle(NULL))
+		return 1;
+
+	mrbusPktQueueDrop(&mrbusTxQueue);
+	return 0;
+}
+
+uint8_t mrbusTransmitSingle(uint8_t *buf)
+{
+	uint8_t status;
+	uint8_t address;
+	uint8_t i;
+	uint16_t crc16 = 0x0000;
+
+	//  Return if bus already active.
+	if (mrbusTxActive())
+		return(1);
+
+	if (buf)
+		memcpy(mrbusTxBuffer, buf, sizeof(mrbusTxBuffer));
+
 	// If we have no packet length, or it's less than the header, just silently say we transmitted it
 	// On the AVRs, if you don't have any packet length, it'll never clear up on the interrupt routine
 	// and you'll get stuck in indefinite transmit busy
 	if (mrbusTxBuffer[MRBUS_PKT_LEN] < MRBUS_PKT_TYPE)
-	{
-		mrbusPktQueueDrop(&mrbusTxQueue);
-		return(0);
-	}
+		return 0;
 		
 	address = mrbusTxBuffer[MRBUS_PKT_SRC];
 
@@ -347,8 +360,6 @@ uint8_t mrbusTransmit(void)
 		// Enable transmit interrupt
 		MRBUS_UART_SCR_B |= _BV(MRBUS_UART_UDRIE);
 	}
-
-	mrbusPktQueueDrop(&mrbusTxQueue);
 
 	return(0);
 }

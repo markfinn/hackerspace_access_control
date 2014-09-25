@@ -56,6 +56,7 @@ void mrbusInit(void);
 void mrbusSetPriority(uint8_t priority);
 uint8_t mrbusTxActive();
 uint8_t mrbusTransmit(void);
+uint8_t mrbusTransmitSingle(uint8_t *buf);
 uint8_t mrbusIsBusIdle();
 uint8_t mrbusPktHandlerStart(MRBusPktQueue* mrbusRxQueue, uint8_t* rxBuffer, uint8_t rSize, uint8_t* txBuffer, uint8_t tSize);
 
