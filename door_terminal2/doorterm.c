@@ -39,6 +39,7 @@ LICENSE:
 #include "vfd.h"
 
 const char const KEYMAP[]  = {'#', '9', '6', '3', '0', '8', '5', '2', '*', '7', '4', '1'};
+#define KEYS_RESET 0x121 //*-8-#   bitmap: 0001 0010 0001
 
 uint8_t mrbus_dev_addr = 0;
 
@@ -238,57 +239,62 @@ void keycodeInsert(unsigned char scancode)
 }
 void keyboard_scan()
 {
-		if((kbd_state&1)==0)
-		{
-			KB_COLS_PORT=(KB_COLS_PORT|(1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2]))&~(1<<KB_COLS[kbd_state/2]);
-			KB_COLS_DDR =(KB_COLS_DDR&~((1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2])))|(1<<KB_COLS[kbd_state/2]);
-		}
-		else
-		{
-			KEYBDSTATE<<=KB_ROWS_N;
-			KEYBDSTATE |= (KB_ROWS_PIN>>KB_ROWS_SHIFT)&((1<<KB_ROWS_N)-1);
-		}
-		kbd_state++;
-		if(kbd_state>=6)
-		{
-			kbd_state=0;
-			KEYBDSTATE^=0xfff;
+	static uint8_t kbd_state=0;
+	static uint16_t KEYBDSTATE=0;
+	static uint16_t KEYBDPREVSTATE=0;
+	static uint8_t KEYBDREPTSTATE=0xff;//nothing pressed, no current key
 
-			if ((0x230&KEYBDSTATE)==0x230)//reset on 0-8-9
-				reset();
-				
-			uint16_t delta=KEYBDPREVSTATE^KEYBDSTATE;
+	if((kbd_state&1)==0)
+	{
+		KB_COLS_PORT=(KB_COLS_PORT|(1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2]))&~(1<<KB_COLS[kbd_state/2]);
+		KB_COLS_DDR =(KB_COLS_DDR&~((1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2])))|(1<<KB_COLS[kbd_state/2]);
+	}
+	else
+	{
+		KEYBDSTATE<<=KB_ROWS_N;
+		KEYBDSTATE |= (KB_ROWS_PIN>>KB_ROWS_SHIFT)&((1<<KB_ROWS_N)-1);
+	}
+	kbd_state++;
+	if(kbd_state>=6)
+	{
+		kbd_state=0;
+		KEYBDSTATE^=0xfff;
 
-			if (delta&KEYBDSTATE)
-			{//new key pressed
-				while(delta&KEYBDSTATE)
-				{
-					KEYBDREPTSTATE=__builtin_ctz(delta&KEYBDSTATE);
-					delta^=1<<KEYBDREPTSTATE;
-					keycodeInsert(KEYBDREPTSTATE);
+		if ((KEYS_RESET&KEYBDSTATE)==KEYS_RESET)//reset on magic compo
+			reset();
+			
+		uint16_t delta=KEYBDPREVSTATE^KEYBDSTATE;
+
+		if (delta&KEYBDSTATE)
+		{//new key pressed
+			while(delta&KEYBDSTATE)
+			{
+				KEYBDREPTSTATE=__builtin_ctz(delta&KEYBDSTATE);
+				delta^=1<<KEYBDREPTSTATE;
+				keycodeInsert(KEYBDREPTSTATE);
+			}
+		}
+		else if (KEYBDREPTSTATE!=0xff && delta&(1<<(KEYBDREPTSTATE&0xf)))
+		{//old repeat key unpressed
+			KEYBDREPTSTATE=0xff;
+		}
+		else if (KEYBDREPTSTATE!=0xff)
+		{//advancing repeat timers
+			uint8_t t=1+(KEYBDREPTSTATE>>4);
+			if(t==11 || t==11+3)
+			{//start or continue repeat
+				keycodeInsert(KEYBDREPTSTATE&0xf);
+				if(t==11+3)
+				{//continue repeat
+					t=10;
 				}
 			}
-			else if (KEYBDREPTSTATE!=0xff && delta&(1<<(KEYBDREPTSTATE&0xf)))
-			{//old repeat key unpressed
-				KEYBDREPTSTATE=0xff;
-			}
-			else if (KEYBDREPTSTATE!=0xff)
-			{//advancing repeat timers
-				uint8_t t=1+(KEYBDREPTSTATE>>4);
-				if(t==11 || t==11+3)
-				{//start or continue repeat
-					keycodeInsert(KEYBDREPTSTATE&0xf);
-					if(t==11+3)
-					{//continue repeat
-						t=10;
-					}
-				}
-				KEYBDREPTSTATE=(t<<4)|(KEYBDREPTSTATE&0xf);
-			}
-
-			KEYBDPREVSTATE=KEYBDSTATE;
-			KEYBDSTATE=0;
+			KEYBDREPTSTATE=(t<<4)|(KEYBDREPTSTATE&0xf);
 		}
+
+		KEYBDPREVSTATE=KEYBDSTATE;
+		KEYBDSTATE=0;
+	}
 
 }
 
@@ -296,10 +302,6 @@ ISR(TIMER0_COMPA_vect)
 {
 	static uint16_t next=0;
 	static uint8_t centiSecs=0;
-	static uint8_t kbd_state=0;
-	static uint16_t KEYBDSTATE=0;
-	static uint16_t KEYBDPREVSTATE=0;
-	static uint8_t KEYBDREPTSTATE=0xff;//nothing pressed, no current key
 
 	ticks50khz++;
 	if(ticks50khz==next)
@@ -962,33 +964,6 @@ uint8_t pkt_count = 0;
 	while (1)
 	{
 		wdt_reset();
-
-		if (KBD_ringBufferDepth(&KBD_ringBuffer))
-		{
-			static unsigned int n=0;
-			unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
-			if(key=='*')
-			{
-				n=0;
-				cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
-			}
-			else if(key=='#')
-			{
-				if(n>200)
-					n=200;
-				char*x=malloc(n+1);
-				memset(x, 'x', n);
-				x[n]=0;
-				cvprintf(VFDCOMMAND_CLEARHOME "%s", x);
-				free(x);
-				n=0;
-			}
-			else
-			{
-				n=n*10+(key-'0');
-				cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
-			}
-		}
 
 		if(fatalError)
 		{
