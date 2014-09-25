@@ -134,7 +134,11 @@ typedef struct {
 
 #define ct_assert(e) ((void)sizeof(char[1 - 2*!(e)]))
 
-typedef enum {RDP_SYN_RCVD} RDP_STATE_t;
+typedef enum {RDP_SYN_RCVD, RDP_OPEN} RDP_STATE_t;
+typedef enum {RDP_PKT_SYN, RDP_PKT_SYNACK, RDP_PKT_ACK, RDP_PKT_RST} RDP_PACKET_t;
+
+
+
 
 typedef struct {
 uint8_t addr;
@@ -480,11 +484,6 @@ void keySetup(client_t *c, uint8_t remote_addr, uint16_t negotiated_salt)
 	uint8_t buf[16];
 	aes128_ctx_t client_aes_ctx;
 
-	memset(c, 0, sizeof(client_t));
-	c->addr = remote_addr;
-	c->maxpktsize=20;
-
-
 	memset(buf+5, 0, 16-5);
 	buf[0] = negotiated_salt;
 	buf[1] = negotiated_salt>>8;
@@ -737,69 +736,76 @@ send:
 					break;
 			if(i>=MAXCLIENTS)
 			{
-				//no open connection slots. send a fail TODO what is a fail?
-				txBuffer[MRBUS_PKT_LEN] = 8;
+closeRDPSend:
+				//no open connection slots. close.
+				txBuffer[MRBUS_PKT_LEN] = 7;
 				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
-				txBuffer[6]  = 0;
-				txBuffer[7]  = 1;
+				txBuffer[6]  = RDP_PKT_RST;
 				goto send;
 			}
 			//we don't have a conversation with this client, and we have an open slot
 			//startup. equiventent to the listen state in RUDP
-			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 8 && rxBuffer[6]==0 && rxBuffer[7]==0)
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
 			{
+restartRDP:
 				//syn recvd
-				keySetup(c, rxBuffer[MRBUS_PKT_SRC], 1);
-
-				//send syn,ack
-				txBuffer[MRBUS_PKT_LEN] = 8;
-				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
-				txBuffer[6]  = 0;
-				txBuffer[7]  = 1;
-				c->state = RDP_SYN_RCVD;
-				marktime(c);
-				goto send;
+				memset(c, 0, sizeof(client_t));
+				//taken care of by memset 0: c->state = RDP_SYN_RCVD;
+				c->addr = rxBuffer[MRBUS_PKT_SRC];
+				c->maxpktsize=20;
 			}
 			else
 				goto PktIgnore;
 		}
-		uint8_t hbuf[6];
-		hbuf[0] = rxBuffer[MRBUS_PKT_DEST];
-		hbuf[1] = rxBuffer[MRBUS_PKT_SRC];
-		hbuf[2] = rxBuffer[MRBUS_PKT_LEN];
-		hbuf[3] = rxBuffer[MRBUS_PKT_TYPE];
-		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128) 
+
+		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_RST)
+		{//passive close
+			c->addr=0;
+			goto PktIgnore;
+		}
+		else if(c->state = RDP_SYN_RCVD)
 		{
-			if(rxBuffer[6]!=0)
-			{//setup
-				//todo
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
+			{
+				//send syn,ack
+				txBuffer[MRBUS_PKT_LEN] = 7;
+				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+				txBuffer[6]  = RDP_PKT_SYNACK;
+				marktime(c);
+				goto send;
+			}
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
+			{
+				//send ack
+				txBuffer[MRBUS_PKT_LEN] = 7;
+				txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
+				txBuffer[6]  = RDP_PKT_ACK;
+				marktime(c);
+				c->state = RDP_OPEN;
+				goto send;
 			}
 			else
-			{//ack
-				if (rxBuffer[MRBUS_PKT_LEN] < 6+1+2+1+8)
-					goto PktIgnore;
-				hbuf[4] = rxBuffer[6];//type
-				uint16_t pktNum = *(uint16_t*)(rxBuffer+7); 
-				if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
-					goto PktIgnore;
-				*(uint16_t*)(hbuf+5) = pktNum;
-				c->eax_nonce[2] = pktNum|0X8000;
-				//verify pkt and decrypt
-				if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+9, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 7, rxBuffer+9, rxBuffer[MRBUS_PKT_LEN]-9))
-				{
-	FailedSig:
-					//failed sig.
-					clprintW("SigFail");
-					if (++c->failedPkts>RDP_MAX_SIG_FAILS)
-						nukesessionkey();
-					goto PktIgnore;
-				}
-				marktime(c);
-				//ok, ack recvd pktNum, flags in rxBuffer[9].
+			{//active close
+				c->addr=0;
+				goto closeRDPSend;
 			}
 		}
-		else
+		else if(c->state = RDP_OPEN)
 		{
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
+			{
+				//got a mis-placed syn. assume we missed a RST
+				goto restartRDP;
+			}
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
+			{
+				marktime(c);
+				goto PktIgnore;
+			}
+			else
+			{
+			}
+//cont here:
 			int8_t seqNum = rxBuffer[MRBUS_PKT_TYPE]%RDP_SEQ_N;
 			uint16_t pktNum = ((seqNum-((c->recvPktCounter&(RDP_RECV_OVERLOAD*2-1))-RDP_RECV_OVERLOAD)-1)&(RDP_RECV_OVERLOAD*2-1))+1+c->recvPktCounter-RDP_RECV_OVERLOAD;//some magic here from clientPktCounter and seqNum; 
 			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
