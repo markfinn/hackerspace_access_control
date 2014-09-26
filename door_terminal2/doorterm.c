@@ -111,6 +111,9 @@ uint32_t master_key_salt;
 #if RDP_MAX_RECV_PKT_SIZE > 0xfff
 #error buffer too big. coded to need less than a 12 bits for size here
 #endif
+#if RDP_MAX_TX_OVERLOAD > 8
+#error buffer too big. limited by assuming bita in a byte in c->acks and nacks
+#endif
 
 typedef struct {
 	uint8_t missingPkt[RDP_MAX_DATA_PER_PKT];
@@ -125,7 +128,7 @@ typedef struct {
 } RDP_recv_datagram_t; 
 
 typedef struct {
-	uint16_t pktNum;
+	uint32_t pktNum;
 	uint16_t timer;
 	uint8_t mrbPkt[MRBUS_BUFFER_SIZE];
 } RDP_tx_pkt_queue_t; 
@@ -135,7 +138,7 @@ typedef struct {
 #define ct_assert(e) ((void)sizeof(char[1 - 2*!(e)]))
 
 typedef enum {RDP_SYN_RCVD, RDP_OPEN} RDP_STATE_t;
-typedef enum {RDP_PKT_SYN, RDP_PKT_SYNACK, RDP_PKT_ACK, RDP_PKT_RST} RDP_PACKET_t;
+typedef enum {RDP_PKT_SYN, RDP_PKT_SYNACK, RDP_PKT_ACK, RDP_PKT_RST, RDP_PKT_DATA} RDP_PACKET_t;
 
 
 
@@ -147,6 +150,11 @@ uint8_t maxpktsize;
 
 cmac_aes_ctx_t cmac_ctx;
 uint16_t eax_nonce[3];
+
+uint32_t minack;
+uint8_t acks;
+uint8_t nacks;
+
 
 uint8_t sendOverload;
 uint16_t sendPktCounter;
@@ -551,61 +559,76 @@ void RDP_DATA_RECV(client_t *c)
 	}
 }
 
-void RDP_ACK(client_t *c, uint16_t pktNum, uint8_t code)
+void RDP_ACKNACK(client_t *c, uint32_t pktNum, uint8_t an)
 {
-//todo: scan outgoing mrbus queue for an ack for this client that I could merge with this one using the "up to" flag
-	uint8_t txBuffer[MRBUS_BUFFER_SIZE];
-	uint8_t hbuf[6];
-
-	hbuf[1] = txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-	hbuf[0] = txBuffer[MRBUS_PKT_DEST] = c->addr;
-	hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+3+8;
-	hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = RDP_SEQ_N-128;
-	hbuf[4] = txBuffer[6] = 0;//ack
-	*(uint16_t*)(hbuf+5) = *(uint16_t*)(txBuffer+7) = pktNum; 
-	txBuffer[9] = code;
-	c->eax_nonce[2] = pktNum|0X8000;
-	//encrypt
-	eax_aes_enc(&c->cmac_ctx, txBuffer+8, 8, (uint8_t*)c->eax_nonce, 6, hbuf, 7, txBuffer+9, 1);
-	mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-
-}
-void RDP_tx(client_t *c, uint8_t channel, uint16_t len, uint8_t *data)
-{
-
-//uint8_t sendOverload;
-//uint16_t sendPktCounter;
-//RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
-
-	uint8_t hbuf[4];
-	uint8_t *txBuffer = c->txPktBuffer[0].mrbPkt;//ASDF!
-	do
+	if (c->minack<=pktNum)
 	{
+		uint8_t x=pktNum-c->minack;
+		if(an)
+		{
+			c->acks|=1<<x;
+			c->nacks&=~(1<<x);
+		}
+		else
+		{
+			c->acks&=~(1<<x);
+			c->nacks|=1<<x;
+		}
+	}
+	else
+	{
+		uint8_t x=c->minack-pktNum;
+		c->acks<<=x;
+		c->nacks<<=x;
 
-		uint8_t *p=txBuffer+MRBUS_PKT_TYPE+1;
-		uint8_t pdlen=5;//ASDF!
-
-		uint16_t pktNum = c->sendPktCounter;
-
-		hbuf[1] = txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		hbuf[0] = txBuffer[MRBUS_PKT_DEST] = c->addr;
-		hbuf[2] = txBuffer[MRBUS_PKT_LEN] = 6+pdlen+RDP_DATA_TAG_SIZE;
-		hbuf[3] = txBuffer[MRBUS_PKT_TYPE] = (pktNum%16)-128;
-
-		c->eax_nonce[2] = pktNum;
-		//encrypt
-		eax_aes_enc(&c->cmac_ctx, txBuffer+6, RDP_DATA_TAG_SIZE, (uint8_t*)c->eax_nonce, 6, hbuf, 4, txBuffer+6, txBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE);
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-
-		len-=pdlen;
-		data+=pdlen;
-	}while(len);
+		if(an)
+			c->acks|=1;
+		else
+			c->nacks|=1;
+	}
 }
+#define RDP_ACK(c,p) RDP_ACKNACK(c,p,1)
+#define RDP_NACK(c,p) RDP_ACKNACK(c,p,0)
+
 
 uint8_t RDPTXneeded(void)
-{}
+{
+	for (client_t *c=clients;c<clients+MAXCLIENTS; c++)
+		if(c->addr && (c->acks||c->nacks))
+			return 1;
+
+	return 0;
+}
+
 uint8_t RDPTX()
-{}
+{
+static client_t *c=clients;//save it off so that we can round-robbin to make sure no one gets starved
+uint8_t i;
+	for (i=0;i<MAXCLIENTS; i++, c++)
+	{
+		if(c>=clients+MAXCLIENTS)
+			c=clients;
+		if(c->addr==0)
+			continue;
+	
+		if(c->acks||c->nacks)
+			{
+
+here				
+				return 0;
+			}
+	}
+	return 1;
+
+
+/*RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
+	uint32_t pktNum;
+	uint16_t timer;
+	uint8_t mrbPkt[MRBUS_BUFFER_SIZE];
+*/
+
+
+}
 
 void PktHandler(void)
 {
@@ -745,7 +768,7 @@ closeRDPSend:
 			}
 			//we don't have a conversation with this client, and we have an open slot
 			//startup. equiventent to the listen state in RUDP
-			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
 			{
 restartRDP:
 				//syn recvd
@@ -758,14 +781,14 @@ restartRDP:
 				goto PktIgnore;
 		}
 
-		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_RST)
+		if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_RST)
 		{//passive close
 			c->addr=0;
 			goto PktIgnore;
 		}
-		else if(c->state = RDP_SYN_RCVD)
+		else if(c->state == RDP_SYN_RCVD)
 		{
-			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
 			{
 				//send syn,ack
 				txBuffer[MRBUS_PKT_LEN] = 7;
@@ -774,7 +797,7 @@ restartRDP:
 				marktime(c);
 				goto send;
 			}
-			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
 			{
 				//send ack
 				txBuffer[MRBUS_PKT_LEN] = 7;
@@ -790,90 +813,86 @@ restartRDP:
 				goto closeRDPSend;
 			}
 		}
-		else if(c->state = RDP_OPEN)
+		else if(c->state == RDP_OPEN)
 		{
-			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
+			if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_SYN)
 			{
 				//got a mis-placed syn. assume we missed a RST
 				goto restartRDP;
 			}
-			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && txBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] == 7 && rxBuffer[6]==RDP_PKT_ACK)
 			{
 				marktime(c);
 				goto PktIgnore;
 			}
-			else
+			else if ((int8_t)rxBuffer[MRBUS_PKT_TYPE] == RDP_SEQ_N-128 && rxBuffer[MRBUS_PKT_LEN] >= 11 && rxBuffer[6]==RDP_PKT_DATA)
 			{
-			}
-//cont here:
-			int8_t seqNum = rxBuffer[MRBUS_PKT_TYPE]%RDP_SEQ_N;
-			uint16_t pktNum = ((seqNum-((c->recvPktCounter&(RDP_RECV_OVERLOAD*2-1))-RDP_RECV_OVERLOAD)-1)&(RDP_RECV_OVERLOAD*2-1))+1+c->recvPktCounter-RDP_RECV_OVERLOAD;//some magic here from clientPktCounter and seqNum; 
-			if (pktNum &0x8000)//illegal pkt num?  (leaves room for the ack and data nonces to not re-use each other
-				goto PktIgnore;
-			c->eax_nonce[2] = pktNum;
-			//verify pkt and decrypt
-			if(0 == eax_aes_dec(&c->cmac_ctx, rxBuffer+6, RDP_DATA_TAG_SIZE, (uint8_t*)c->eax_nonce, 6, hbuf, 4, rxBuffer+6, rxBuffer[MRBUS_PKT_LEN]-6))
-				goto FailedSig;
+				//data in control packet
+				//buf at rxBuffer+6+1+4
+				//buf in len rxBuffer[MRBUS_PKT_LEN]-6-1-4
+				//seq num *(uint32_t*)(rxBuffer+7)
 
-			uint8_t sz=rxBuffer[MRBUS_PKT_LEN]-6-RDP_DATA_TAG_SIZE;
-			//ok, data recvd pktNum, in rxBuffer+6, size sz
-			if(c->recvPktCounter<pktNum)
-				c->recvPktCounter=pktNum;
+				marktime(c);
 
-			if(pktNum-c->recvPktFirstMissing>=RDP_RECV_OVERLOAD)//shouldn't be able to happen if I got my math right above
-			{
-				RDP_ACK(c, pktNum, 1);
-				goto PktIgnore;
-			}
+				uint32_t pktNum = *(uint32_t*)(rxBuffer+7);
+				uint8_t sz=rxBuffer[MRBUS_PKT_LEN]-6-1-4;
+				//ok, data recvd pktNum, in rxBuffer+6, size sz
+				if(c->recvPktCounter<pktNum)
+					c->recvPktCounter=pktNum;
 
-			if(pktNum<c->recvPktFirstMissing || c->recvMarkers&(1<<(pktNum-c->recvPktFirstMissing)))//we don't need this again
-			{
-				RDP_ACK(c, pktNum, 2);
-				goto PktIgnore;
-			}
+				if(pktNum-c->recvPktFirstMissing>=RDP_RECV_OVERLOAD)
+				{
+					RDP_NACK(c, pktNum);
+					goto PktIgnore;
+				}
+
+				if(pktNum<c->recvPktFirstMissing || c->recvMarkers&(1<<(pktNum-c->recvPktFirstMissing)))//we don't need this again
+				{
+					RDP_ACK(c, pktNum);
+					goto PktIgnore;
+				}
 			
-			marktime(c);
-			RDP_buffer_slot_t *p = (void*)(c->recvBuffer+c->recvBufferCount); 
-			int8_t x = pktNum-c->recvPktFirstMissing;
+				RDP_buffer_slot_t *p = (void*)(c->recvBuffer+c->recvBufferCount); 
+				int8_t x = pktNum-c->recvPktFirstMissing;
 
-			if(x==0)
-			{
-				if (RDP_RECV_PKT_BUFFER_SIZE-c->recvBufferCount <sz)//don't particularly worry about overrun.  there is allocated space for a full datagram plus a new packet.
-				{//this should only happen if a previous RDP_DATA_RECV ignores a full datagram, which "shouldn't" happen, so lets not worry about handling it very well.
-					RDP_DATA_RECV(c);
-					goto PktIgnore;
-				}
-				do
+				if(x==0)
 				{
-					c->recvMarkers>>=1;
-					++c->recvPktFirstMissing;
-				}while (c->recvMarkers&1);
-				c->recvBufferCount+=sz+p->dataLen;
-			}
-			else
-			{
-				while (x > 0 && (void*)(p+1)<=(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE))
-				{
-					x--;//count the missing packet in this slot
-					x-=p->pktsInData;//count the packets that have been collapsed into the data of this slot
-					p=(void*)(((uint8_t*)(p+1))+p->dataLen); //advance p
+					if (RDP_RECV_PKT_BUFFER_SIZE-c->recvBufferCount <sz)//don't particularly worry about overrun.  there is allocated space for a full datagram plus a new packet.
+					{//this should only happen if a previous RDP_DATA_RECV ignores a full datagram, which "shouldn't" happen, so lets not worry about handling it very well.
+						RDP_DATA_RECV(c);
+						goto PktIgnore;
+					}
+					do
+					{
+						c->recvMarkers>>=1;
+						++c->recvPktFirstMissing;
+					}while (c->recvMarkers&1);
+					c->recvBufferCount+=sz+p->dataLen;
 				}
-				if(x!=0 || (void*)(p+1)>(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE)) //there is no room in the buffer for this packet
-					goto PktIgnore;
+				else
+				{
+					while (x > 0 && (void*)(p+1)<=(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE))
+					{
+						x--;//count the missing packet in this slot
+						x-=p->pktsInData;//count the packets that have been collapsed into the data of this slot
+						p=(void*)(((uint8_t*)(p+1))+p->dataLen); //advance p
+					}
+					if(x!=0 || (void*)(p+1)>(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE)) //there is no room in the buffer for this packet
+						goto PktIgnore;
 
-				c->recvMarkers|=(1<<(pktNum-c->recvPktFirstMissing));
-				(p-1)->pktsInData++;
-				(p-1)->dataLen+=sz;
+					c->recvMarkers|=(1<<(pktNum-c->recvPktFirstMissing));
+					(p-1)->pktsInData++;
+					(p-1)->dataLen+=sz;
+				}
+				RDP_ACK(c, pktNum);
+				memcpy(p->missingPkt, rxBuffer+6+1+4, sz);
+				memmove((uint8_t*)p+sz, p->collapsedData, c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-p->collapsedData);
+				memset(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-(p->collapsedData-((uint8_t*)p+sz)), 0, p->collapsedData-((uint8_t*)p+sz));
+
+				RDP_DATA_RECV(c);
 			}
-			RDP_ACK(c, pktNum, 0);
-			memcpy(p->missingPkt, rxBuffer+6, sz);
-			memmove((uint8_t*)p+sz, p->collapsedData, c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-p->collapsedData);
-			memset(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE-(p->collapsedData-((uint8_t*)p+sz)), 0, p->collapsedData-((uint8_t*)p+sz));
 
-			RDP_DATA_RECV(c);
 		}
-
-
 	
 	
 	}
