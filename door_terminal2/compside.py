@@ -37,57 +37,59 @@ def intargparse(arg):
 
 class RDP(object):
   RDP_SEQ_N=16
-  class RDP_Connection():
-    #STATE_CLOSED     = 0  not used here. handled as connection dictionary entry for that address being None
-    #STATE_LISTEN     = 1  not used here. handled in protocol, not connection
-    STATE_SYN_SENT   = 2
-    STATE_SYN_RCVD   = 3
-    STATE_OPEN       = 4
-    STATE_CLOSE_WAIT = 5
 
-    def __init__(self, active=False):
-      if active:
-        self.state = self.STATE_SYN_SENT
-      else:
-        self.state = self.STATE_SYN_RCVD
-    
+  STATE_CLOSED     = 0
+  STATE_LISTEN     = 1
+  STATE_SYN_SENT   = 2
+  STATE_SYN_RCVD   = 3
+  STATE_OPEN       = 4
+  STATE_CLOSE_WAIT = 5
+
+  PKT_SYN = 0
+  PKT_SYNACK = 1
+  PKT_ACK = 2
+  PKT_RST = 3
+  PKT_DATA = 4
+
   def __init__(self, node):
 
     def _handler(p):
       if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
-        print p
+        print 'DRP hand:', p
         return True #eat packet
     def runner():
+      self.hint=node.install(_handler)
       while self.run:
-        self.node.pump(1)
+        self.node.pump(1)#this isn't very friendly to multiple RDP connections.  node or mrb should be able to spawn a pump thread.
+      self.node.remove(self.hint)
 
 
     self.node = node
-    self.connections = {}
-    self.hint=node.install(_handler)
-    self.listening=False
-
+    self.state = self.STATE_CLOSED
     self.run=True
     self.thread = threading.Thread(group=None, target=runner, name='RDPPump')
     self.thread.start()
     self.sendbuf=[]
 
   def __dell__(self):
-    self.node.remove(self.hint)
+    self.close()
     self.run=False
     self.thread.join()
 
 
-  def stop(self):
-    self.run=False
-    
-  def listen(self):
-    self.listening=True
+  def close(self):
+    if self.state in [self.STATE_CLOSED, self.STATE_LISTEN, self.STATE_CLOSE_WAIT]:
+      self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_RST])
+    self.state=self.STATE_CLOSE_WAIT
     
   def open(self, dest):
-    assert dest not in self.connections
-    self.connections[dest] = self.RDP_Connection(True)
-    self.node.sendpkt([self.RDP_SEQ_N-128, 0])
+    for attempt in xrange(3):
+      self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
+what now
+//  def installTimer(self, when, handler, absolute=False):
+//  def removeTimer(self, hint):
+    self.mrb.removeTimer(hint)
+
 
   def send(self, channel, data):
     assert channel < 16

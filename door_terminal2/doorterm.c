@@ -138,7 +138,7 @@ typedef struct {
 #define ct_assert(e) ((void)sizeof(char[1 - 2*!(e)]))
 
 typedef enum {RDP_SYN_RCVD, RDP_OPEN} RDP_STATE_t;
-typedef enum {RDP_PKT_SYN, RDP_PKT_SYNACK, RDP_PKT_ACK, RDP_PKT_RST, RDP_PKT_DATA} RDP_PACKET_t;
+typedef enum {RDP_PKT_SYN=0, RDP_PKT_SYNACK, RDP_PKT_ACK, RDP_PKT_RST, RDP_PKT_DATA} RDP_PACKET_t;
 
 
 
