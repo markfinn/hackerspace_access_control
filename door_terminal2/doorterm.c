@@ -38,8 +38,6 @@ LICENSE:
 #include "eax_aes.h"
 #include "vfd.h"
 
-const char const KEYMAP[]  = {'#', '9', '6', '3', '0', '8', '5', '2', '*', '7', '4', '1'};
-#define KEYS_RESET 0x121 //*-8-#   bitmap: 0001 0010 0001
 
 uint8_t mrbus_dev_addr = 0;
 
@@ -60,12 +58,15 @@ uint8_t mrbus_dev_addr = 0;
 
 
  //port D
- #define KB_COLS              (const char[]){3, 4, 5}
+ #define KB_COLS_N             3
+ #define KB_COLS              (const char[KB_COLS_N]){3, 4, 5}
  #define KB_COLS_DDR          DDRD
  #define KB_COLS_PORT         PORTD
  #define VFD_SS                6
  #define VFD_BUSY              7 //also drives a pin change int23
 
+const char const KEYMAP[KB_COLS_N * KB_ROWS_N]  = {'#', '9', '6', '3', '0', '8', '5', '2', '*', '7', '4', '1'};
+#define KEYS_RESET 0x121 //*-8-#   bitmap: 0001 0010 0001
 
 #define MRBUS_TX_BUFFER_DEPTH 1
 #define MRBUS_RX_BUFFER_DEPTH 3
@@ -263,6 +264,9 @@ void keyboard_scan()
 
 	if((kbd_state&1)==0)
 	{
+		#if KB_COLS_N != 3
+		#error fix keyboard bits
+		#endif
 		KB_COLS_PORT=(KB_COLS_PORT|(1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2]))&~(1<<KB_COLS[kbd_state/2]);
 		KB_COLS_DDR =(KB_COLS_DDR&~((1<<KB_COLS[0])|(1<<KB_COLS[1])|(1<<KB_COLS[2])))|(1<<KB_COLS[kbd_state/2]);
 	}
@@ -272,10 +276,10 @@ void keyboard_scan()
 		KEYBDSTATE |= (KB_ROWS_PIN>>KB_ROWS_SHIFT)&((1<<KB_ROWS_N)-1);
 	}
 	kbd_state++;
-	if(kbd_state>=6)
+	if(kbd_state>=KB_COLS_N*2)
 	{
 		kbd_state=0;
-		KEYBDSTATE^=0xfff;
+		KEYBDSTATE^=(1<<(KB_COLS_N*KB_ROWS_N))-1;
 
 		if ((KEYS_RESET&KEYBDSTATE)==KEYS_RESET)//reset on magic compo
 			reset();
