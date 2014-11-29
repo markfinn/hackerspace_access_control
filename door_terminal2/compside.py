@@ -1,3 +1,5 @@
+#!/bin/python -tt
+
 import sys
 from Crypto.Cipher import AES
 import argparse
@@ -49,58 +51,112 @@ class RDP(object):
   PKT_SYNACK = 1
   PKT_ACK = 2
   PKT_RST = 3
-  PKT_DATA = 4
 
-  def __init__(self, node):
+  lock = threading.Lock()
+  condition = threading.Condition()
 
-    def _handler(p):
-      if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
-        print 'DRP hand:', p
-        return True #eat packet
+  def _timer(self, t):
+    def _handler():
+      with lock:
+        if self.state==self.STATE_SYN_SENT:
+          self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
+          _timer(.3)
+      #        elif asdf:
+      #          asdf()
+        elif self.state==self.STATE_CLOSE_WAIT:
+          self.state=self.STATE_CLOSED
+          self.run=False
+
+    if self.timerHint:
+        self.mrb.removeTimer(self.timerHint)
+    self.mrb.installTimer(t, _handler)
+
+  def _doclose(self, why, setstate=True):
+    self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_RST, why])
+    if setstate:
+      self.state=self.STATE_CLOSE_WAIT
+      _timer(5)
+
+  def __init__(self, mrb):
+    self.mrb=mrb
+    self.node = None
+    self.state = self.STATE_CLOSED
+    self.run=False
+    self.thread = None
+    self.sendbuf=[]
+
+  def _install(self):
     def runner():
+      def _handler(p):
+        if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
+          print 'RDP handler:', p
+          with lock:
+            if self.state==self.STATE_SYN_SENT:
+              if p == [self.RDP_SEQ_N-128, self.PKT_SYNACK]:
+                self.state=self.STATE_OPEN
+                timeout_reset()
+                condition.notify()
+              elif p:
+                _doclose(3)
+            #elif asdf:
+            elif self.state==self.STATE_CLOSE_WAIT:
+              _doclose(1)
+            elif self.state==self.STATE_CLOSED:
+              _doclose(2, False)
+          return True #eat packet
+
       self.hint=node.install(_handler)
       while self.run:
         self.node.pump(1)#this isn't very friendly to multiple RDP connections.  node or mrb should be able to spawn a pump thread.
       self.node.remove(self.hint)
-
-
-    self.node = node
-    self.state = self.STATE_CLOSED
-    self.run=True
+      if self.timerHint:
+        self.mrb.removeTimer(timerHint)
     self.thread = threading.Thread(group=None, target=runner, name='RDPPump')
     self.thread.start()
-    self.sendbuf=[]
 
-  def __dell__(self):
-    self.close()
-    self.run=False
-    self.thread.join()
-
+  def __del__(self):
+    if self.thread:
+      self.close()
 
   def close(self):
-    if self.state in [self.STATE_CLOSED, self.STATE_LISTEN, self.STATE_CLOSE_WAIT]:
-      self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_RST])
-    self.state=self.STATE_CLOSE_WAIT
-    
-  def open(self, dest):
-    for attempt in xrange(3):
+    with lock:
+      if self.state not in [self.STATE_CLOSEWAIT, self.STATE_CLOSED]:
+        _doclose(0)
+    self.thread.join()
+    self.node = None
+    self.state = self.STATE_CLOSED
+    self.thread = None
+    self.sendbuf=[]
+   
+  def open(self, addr):
+    with lock:
+      assert self.state in [self.STATE_LISTEN, self.STATE_CLOSED]
+      self.node = self.mrb.getnode(addr)
+      self.run=True
+      self._install()
+      self.sendbuf=[]
+
       self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
-what now
-//  def installTimer(self, when, handler, absolute=False):
-//  def removeTimer(self, hint):
-    self.mrb.removeTimer(hint)
+      self.state=self.STATE_SYN_SENT
+      _timer(.3)
+      self.condition.wait(3)
+      if self.state != self.STATE_OPEN:
+        _doclose(5)
+        assert 0
 
 
   def send(self, channel, data):
     assert channel < 16
     assert len(data) <= 0xfff
-    self.sendbuf += [(channel<<12) | (len(data)>>8), len(data)&0xff] + data
+    with lock:
+      self.sendbuf += [(channel<<12) | (len(data)>>8), len(data)&0xff] + data
+    _handler(None)
     
 
 
 class doorterm(RDP):
-  def __init__(self, node):
-    super(doorterm, self).__init__(node)
+  def __init__(self, mrb):
+    super(doorterm, self).__init__(mrb)
 
   def putScreen(self, s):
     self.send(1, [ord(c) for c in s])
@@ -112,7 +168,7 @@ if __name__ == '__main__':
   parser = argparse.ArgumentParser(description='nfc door term prog')
   parser.add_argument('-p', '--port', type=str,help='port for mrbus CI2 interface. Will guess /dev/ttyUSB? if not specified')
   parser.add_argument('-a', '--addr-host', help='mrbus address to use for host.  Will scan for an unused address if not specified')
-  parser.add_argument('-d', '--addr', default=None, help='mrbus address of node to program.  Will scan for a singular node in bootloader mode if not specified')
+  parser.add_argument('-d', '--addr', default=None, help='mrbus address of node to program.  Will scan for a singular NfcDoor node if not specified')
   args = parser.parse_args()
 
   args.addr_host = intargparse(args.addr_host)
@@ -151,10 +207,9 @@ if __name__ == '__main__':
     args.addr = nodes[0]
 
   node = mrb.getnode(args.addr)
-
-  dt=doorterm(node)
+  dt=doorterm(mrb)
   try:
-    dt.open(2)
+    dt.open(args.addr)
     dt.putScreen('hi')
 
     while 1:
