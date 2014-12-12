@@ -12,6 +12,20 @@ sys.path.insert(0, '../../mrbus_bootloader')
 import mrbus
 
 
+def strfrombytes(b):
+  s=''
+  for bb in b:
+    s+=str(chr(bb))
+  return s
+
+
+def intargparse(arg):
+  if arg==None:
+    return arg
+  elif arg.startswith('0x') or arg.startswith('0X'):
+    return int(arg[2:], 16)
+  else:
+    return int(arg)
 
 
 
@@ -112,7 +126,7 @@ class RDP(object):
     self.sendbuf=[]
    
   def open(self, addr):
-    with lock:
+    with self.lock:
       assert self.state in [self.STATE_LISTEN, self.STATE_CLOSED]
       self.node = self.mrb.getnode(addr)
       self.run=True
@@ -178,12 +192,13 @@ if __name__ == '__main__':
       print 'found more than one node found. specify an address.'
       sys.exit(1)
     args.addr = nodes[0]
+    print 'found node @', args.addr
 
-  node = mrb.getnode(args.addr)
-  dt=doorterm(mrb)
+  r=RDP(mrb)
+  r.open(args.addr)
   try:
-    dt.open(args.addr)
-    dt.putScreen('hi')
+    r.open(args.addr)
+#    r.putScreen('hi')
 
     while 1:
       pass

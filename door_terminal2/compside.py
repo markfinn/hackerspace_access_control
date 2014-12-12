@@ -10,20 +10,6 @@ import mrbus
 
 
     
-def strfrombytes(b):
-  s=''
-  for bb in b:
-    s+=str(chr(bb))
-  return s
-
-
-def intargparse(arg):
-  if arg==None:
-    return arg
-  elif arg.startswith('0x') or arg.startswith('0X'):
-    return int(arg[2:], 16)
-  else:
-    return int(arg)
 
 class doorterm(RDP):
   def __init__(self, mrb):
