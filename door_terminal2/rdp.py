@@ -50,29 +50,58 @@ class RDP(object):
   PKT_RST = 3
 
   lock = threading.Lock()
-  condition = threading.Condition()
+  condition = threading.Condition(lock)
+  timerHint = None
+
+  def _time_handler(self):
+    with self.lock:
+      if self.state==self.STATE_SYN_SENT:
+        self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
+        self._timer(.3)
+      elif self.state==self.STATE_OPEN:
+        #if datapktwaiting for ack
+          #asdf
+        #else:#just a long time since we've seen any data
+          pass#send an empty?
+      elif self.state==self.STATE_CLOSE_WAIT:
+        self.state=self.STATE_CLOSED
+        self.run=False
+
+  def _pkt_handler_stub(self, p):
+    if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
+      self._pkt_handler(p)
+      return True #eat packet
+
+  def _pkt_handler(self, p):#p==None for new data to send
+    print 'RDP handler:', p
+    with self.lock:
+      if self.state==self.STATE_SYN_SENT:
+        if p == [256+self.RDP_SEQ_N-128, self.PKT_SYNACK]:
+          self.state=self.STATE_OPEN
+          self._timer(30)
+          self.condition.notify()
+        elif p:
+          self._doclose(3)
+      elif self.state==self.STATE_OPEN:
+        if p == None:
+          pass
+        else:
+          pass
+      elif not p or self.state==self.STATE_CLOSE_WAIT:
+        self._doclose(1)
+      elif self.state==self.STATE_CLOSED:
+        self._doclose(2, False)
 
   def _timer(self, t):
-    def _handler():
-      with lock:
-        if self.state==self.STATE_SYN_SENT:
-          self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
-          _timer(.3)
-      #        elif asdf:
-      #          asdf()
-        elif self.state==self.STATE_CLOSE_WAIT:
-          self.state=self.STATE_CLOSED
-          self.run=False
-
     if self.timerHint:
         self.mrb.removeTimer(self.timerHint)
-    self.mrb.installTimer(t, _handler)
+    self.mrb.installTimer(t, lambda:self._time_handler())
 
   def _doclose(self, why, setstate=True):
     self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_RST, why])
     if setstate:
       self.state=self.STATE_CLOSE_WAIT
-      _timer(5)
+      self._timer(5)
 
   def __init__(self, mrb):
     self.mrb=mrb
@@ -84,25 +113,7 @@ class RDP(object):
 
   def _install(self):
     def runner():
-      def _handler(p):
-        if p.cmd >= 0x80 and p.cmd < 0x80+self.RDP_SEQ_N+1:
-          print 'RDP handler:', p
-          with lock:
-            if self.state==self.STATE_SYN_SENT:
-              if p == [self.RDP_SEQ_N-128, self.PKT_SYNACK]:
-                self.state=self.STATE_OPEN
-                timeout_reset()
-                condition.notify()
-              elif p:
-                _doclose(3)
-            #elif asdf:
-            elif self.state==self.STATE_CLOSE_WAIT:
-              _doclose(1)
-            elif self.state==self.STATE_CLOSED:
-              _doclose(2, False)
-          return True #eat packet
-
-      self.hint=node.install(_handler)
+      self.hint=self.node.install(lambda p:self._pkt_handler_stub(p))
       while self.run:
         self.node.pump(1)#this isn't very friendly to multiple RDP connections.  node or mrb should be able to spawn a pump thread.
       self.node.remove(self.hint)
@@ -116,9 +127,9 @@ class RDP(object):
       self.close()
 
   def close(self):
-    with lock:
-      if self.state not in [self.STATE_CLOSEWAIT, self.STATE_CLOSED]:
-        _doclose(0)
+    with self.lock:
+      if self.state not in [self.STATE_CLOSE_WAIT, self.STATE_CLOSED]:
+        self._doclose(0)
     self.thread.join()
     self.node = None
     self.state = self.STATE_CLOSED
@@ -135,19 +146,19 @@ class RDP(object):
 
       self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_SYN])
       self.state=self.STATE_SYN_SENT
-      _timer(.3)
+      self._timer(.3)
       self.condition.wait(3)
       if self.state != self.STATE_OPEN:
-        _doclose(5)
-        assert 0
+        self._doclose(5)
+        raise IOError("open timed out")
 
 
   def send(self, channel, data):
     assert channel < 16
     assert len(data) <= 0xfff
-    with lock:
+    with self.lock:
       self.sendbuf += [(channel<<12) | (len(data)>>8), len(data)&0xff] + data
-    _handler(None)
+    self._pkt_handler(None)
     
 
 if __name__ == '__main__':

@@ -3,7 +3,8 @@
 import sys
 import argparse
 import os
-from rdp import RDP
+from rdp import RDP, intargparse
+import traceback
 
 sys.path.insert(0, '../../mrbus_bootloader')
 import mrbus
@@ -18,6 +19,8 @@ class doorterm(RDP):
   def putScreen(self, s):
     self.send(1, [ord(c) for c in s])
 
+  def disconnect(self):
+    self.close()
 
 
 if __name__ == '__main__':
@@ -42,7 +45,7 @@ if __name__ == '__main__':
       sys.exit(1)
     args.port='/dev/'+args.port[0]
   
-  mrb = mrbus.mrbus(args.port, addr=args.addr_host, logall=True, logfile=sys.stdout, extra=True)
+  mrb = mrbus.mrbus(args.port, addr=args.addr_host)#, logall=True, logfile=sys.stdout, extra=True)
 
   def debughandler(p):
     if p.cmd==ord('*'):
@@ -67,11 +70,11 @@ if __name__ == '__main__':
   try:
     dt.open(args.addr)
     dt.putScreen('hi')
-
+    print 'done. push ctrl-c'
     while 1:
       pass
   except:
-    pass
-  dt.stop()
+    print traceback.format_exc()
+  dt.disconnect()
 
 
