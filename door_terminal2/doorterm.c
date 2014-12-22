@@ -164,7 +164,7 @@ RDP_tx_pkt_queue_t txPktBuffer[RDP_MAX_TX_OVERLOAD];
 uint8_t failedPkts;
 uint16_t recvPktCounter;
 #if RDP_RECV_OVERLOAD > 1
-uint16_t recvPktFirstMissing;
+uint16_t recvLastPkt;
 uint8_t recvMarkers;
 uint8_t recvBuffer[RDP_RECV_PKT_BUFFER_SIZE];
 uint8_t recvBufferCount;
@@ -559,7 +559,7 @@ void RDP_DATA_RECV(client_t *c)
 			RDP_USER_DATA_RECV(c, channel, len, data);
 			
 		memmove(c->recvBuffer, c->recvBuffer+len, RDP_RECV_PKT_BUFFER_SIZE-len);
-		c->recvBufferCount-=len;
+		c->recvBufferCount-=len+2;
 	}
 }
 
@@ -833,7 +833,7 @@ restartRDP:
 			{
 				//data in control packet
 				//buf at rxBuffer+6+1+4
-				//buf in len rxBuffer[MRBUS_PKT_LEN]-6-1-4
+				//buf len is rxBuffer[MRBUS_PKT_LEN]-6-1-4
 				//seq num *(uint32_t*)(rxBuffer+7)
 
 				marktime(c);
@@ -844,20 +844,22 @@ restartRDP:
 				if(c->recvPktCounter<pktNum)
 					c->recvPktCounter=pktNum;
 
-				if(pktNum-c->recvPktFirstMissing>=RDP_RECV_OVERLOAD)
+//{int i;for(i=7;i<rxBuffer[MRBUS_PKT_LEN];i++)printf("%02x ", rxBuffer[i]);}
+				if(pktNum-c->recvLastPkt>RDP_RECV_OVERLOAD)
 				{
 					RDP_NACK(c, pktNum);
 					goto PktIgnore;
 				}
 
-				if(pktNum<c->recvPktFirstMissing || c->recvMarkers&(1<<(pktNum-c->recvPktFirstMissing)))//we don't need this again
+				if(pktNum<=c->recvLastPkt || c->recvMarkers&(1<<(pktNum-c->recvLastPkt)))//we don't need this again
 				{
 					RDP_ACK(c, pktNum);
 					goto PktIgnore;
 				}
 			
 				RDP_buffer_slot_t *p = (void*)(c->recvBuffer+c->recvBufferCount); 
-				int8_t x = pktNum-c->recvPktFirstMissing;
+				int8_t x = pktNum-c->recvLastPkt-1;
+//cvprintf("[%lu %u]", pktNum,c->recvPktFirstMissing);
 
 				if(x==0)
 				{
@@ -869,7 +871,7 @@ restartRDP:
 					do
 					{
 						c->recvMarkers>>=1;
-						++c->recvPktFirstMissing;
+						++c->recvLastPkt;
 					}while (c->recvMarkers&1);
 					c->recvBufferCount+=sz+p->dataLen;
 				}
@@ -884,7 +886,7 @@ restartRDP:
 					if(x!=0 || (void*)(p+1)>(void*)(c->recvBuffer+RDP_RECV_PKT_BUFFER_SIZE)) //there is no room in the buffer for this packet
 						goto PktIgnore;
 
-					c->recvMarkers|=(1<<(pktNum-c->recvPktFirstMissing));
+					c->recvMarkers|=(1<<(pktNum-c->recvLastPkt));
 					(p-1)->pktsInData++;
 					(p-1)->dataLen+=sz;
 				}

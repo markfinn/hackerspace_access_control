@@ -6,11 +6,15 @@ import argparse
 import os
 import aes_eax
 import threading
-
+import struct
 
 sys.path.insert(0, '../../mrbus_bootloader')
 import mrbus
 
+
+def ItoNetwork(x):
+  return [ord(a) for a in struct.pack("<I", x)]
+  
 
 def strfrombytes(b):
   s=''
@@ -48,6 +52,9 @@ class RDP(object):
   PKT_SYNACK = 1
   PKT_ACK = 2
   PKT_RST = 3
+  PKT_DATA = 4
+
+  OVERLOADALLOWED = 4
 
   lock = threading.Lock()
   condition = threading.Condition(lock)
@@ -72,22 +79,43 @@ class RDP(object):
       self._pkt_handler(p)
       return True #eat packet
 
-  def _pkt_handler(self, p):#p==None for new data to send
+  def _sendMore(self):
+    with self.lock:
+      if self.lastSentPacket - self.lastAckedPacket >= self.OVERLOADALLOWED or not self.sendbuf:
+       return
+      sendlen = min(self.sendbuf, 9)
+      pkt=self.sendbuf[:sendlen]
+      self.sendbuf=self.sendbuf[sendlen:]
+      self.pkts.append(pkt)
+      self.lastSentPacket += 1
+      self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_DATA]+ItoNetwork(self.lastSentPacket)+pkt)
+      self._timer(2)
+
+  def _pkt_handler(self, p):
     print 'RDP handler:', p
     with self.lock:
       if self.state==self.STATE_SYN_SENT:
         if p == [256+self.RDP_SEQ_N-128, self.PKT_SYNACK]:
+          self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_ACK])
           self.state=self.STATE_OPEN
           self._timer(30)
           self.condition.notify()
-        elif p:
+        else:
           self._doclose(3)
       elif self.state==self.STATE_OPEN:
-        if p == None:
+        if p.cmd == 256+self.RDP_SEQ_N-128: #control
+          if p == [256+self.RDP_SEQ_N-128, self.PKT_SYNACK]:#late synack. maybe our ack was missed
+            self.node.sendpkt([self.RDP_SEQ_N-128, self.PKT_ACK])
+            self._timer(30)
+          else:
+            pass
+				#data in control packet
+				#buf at rxBuffer+6+1+4
+				#buf is rxBuffer[MRBUS_PKT_LEN]-6-1-4
+				#seq num *(uint32_t*)(rxBuffer+7)
+        else: # NORMAL DATA, NOT DONE YET data
           pass
-        else:
-          pass
-      elif not p or self.state==self.STATE_CLOSE_WAIT:
+      elif self.state==self.STATE_CLOSE_WAIT:
         self._doclose(1)
       elif self.state==self.STATE_CLOSED:
         self._doclose(2, False)
@@ -110,6 +138,9 @@ class RDP(object):
     self.run=False
     self.thread = None
     self.sendbuf=[]
+    self.pkts=[]
+    self.lastSentPacket = 0
+    self.lastAckedPacket =0 
 
   def _install(self):
     def runner():
@@ -157,9 +188,8 @@ class RDP(object):
     assert channel < 16
     assert len(data) <= 0xfff
     with self.lock:
-      self.sendbuf += [(channel<<12) | (len(data)>>8), len(data)&0xff] + data
-    self._pkt_handler(None)
-    
+      self.sendbuf += [len(data)&0xff, (channel<<4) | (len(data)>>8)] + data
+    self._sendMore()
 
 if __name__ == '__main__':
   key='yourkeygoeshere\x00'
