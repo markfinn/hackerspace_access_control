@@ -7,4 +7,5 @@ mrbus-svn/
 *.pyc
 *.hex
 *.map
-
+*.fcstd1
+*.stl
