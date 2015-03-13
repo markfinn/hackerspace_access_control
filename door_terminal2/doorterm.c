@@ -52,6 +52,7 @@ uint8_t mrbus_dev_addr = 0;
  #define SCK                   5
  
  //port C
+ //keypad rows on PC2-PC5
  #define KB_ROWS_N             4
  #define KB_ROWS_SHIFT         2
  #define KB_ROWS_PIN          PINC
