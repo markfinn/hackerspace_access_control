@@ -104,12 +104,12 @@ uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(_RING_BUFFER_NAMEIFY(Ring
 
 uint8_t _RING_BUFFER_NAMEIFY(ringBufferPopBlocking)(_RING_BUFFER_NAMEIFY(RingBuffer)* r)
 {
-	uint8_t data;
+	uint8_t data=0;
 	uint8_t fail=1;
 	do{
 		ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
 		{
-			if (r->len == 0)
+			if (r->len != 0)
 			{
 				fail=0;
 				data = _RING_BUFFER_NAMEIFY(ringBufferPopNonBlocking)(r);
