@@ -46,7 +46,7 @@ uint8_t mrbus_dev_addr = 0;
  //Port B
  #define NFC_SS                0
  #define VFD_RESET__NFC_WAKE   1
- #define SPI_SS_UNUSED         2
+ #define SPKR_OC1B             2
  #define MOSI                  3
  #define MISO                  4
  #define SCK                   5
@@ -225,7 +225,7 @@ void reset(void)
 
 void initialize50kHzTimer(void)
 {
-	// Set up timer 1 for 50kHz (20uS) interrupts
+	// Set up timer 0 for 50kHz (20uS) interrupts
 	TCNT0 = 0;
 	OCR0A = 50;
 	TCCR0A = _BV(WGM01);
@@ -672,6 +672,9 @@ send:
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;	
 	}
 	else if ('R' == rxBuffer[MRBUS_PKT_TYPE]) 
@@ -1005,6 +1008,38 @@ uint8_t pkt_count = 0;
 	while (1)
 	{
 		wdt_reset();
+
+               if (KBD_ringBufferDepth(&KBD_ringBuffer))
+               {
+                       static unsigned int n=0;
+                       unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
+                       if(key=='*')
+                       {
+                               n=0;
+                               cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
+                       }
+                       else if(key=='#')
+                       {
+                               if(n==1234)
+                               {
+                                   uint8_t txBuffer[7];
+                                   txBuffer[MRBUS_PKT_LEN] = 7;
+		txBuffer[MRBUS_PKT_TYPE] = 'C';
+		txBuffer[6]  = 50;
+		txBuffer[MRBUS_PKT_DEST] = 0x10;
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+                               cvprintf(VFDCOMMAND_CLEARHOME "Open");
+		                }
+                               n=0;
+                       }
+                       else
+                       {
+                               n=n*10+(key-'0');
+                               cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
+                       }
+               }
+
 
 		if(fatalError)
 		{
