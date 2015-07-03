@@ -189,6 +189,13 @@ uint8_t RDPvsQueue=0;
 #undef RING_BUFFER_NAME
 KBD_RingBuffer KBD_ringBuffer;
 
+typedef struct {
+	uint8_t timeLen;
+	uint16_t period;
+} ToneEntry; 
+
+ToneEntry *tonePointer=NULL;
+uint8_t toneTimer;
 
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
@@ -251,9 +258,37 @@ uint8_t vfdtrysend()
 	return 0;
 }
 
+ToneEntry TONE_KEYPRESS[] = {{2,2000},{0,0}};
+ToneEntry TONE_OPEN[] = {{20,2000},{20,1600},{0,0}};
+
+void set_tone_pattern(ToneEntry *t)
+{
+	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
+	{
+	tonePointer=t;
+  OCR1A = tonePointer->period;
+	toneTimer = tonePointer->timeLen;
+	}
+}
+void tone_generate(){
+	if (NULL == tonePointer)
+    return;
+  if (toneTimer--)
+		return;
+	tonePointer++;
+	if (0==tonePointer->timeLen)
+	{
+		OCR1A = 10;//make it too high to hear. keeps pin centered
+		tonePointer=NULL;
+		return;
+	}
+  OCR1A = tonePointer->period;
+	toneTimer = tonePointer->timeLen;
+}
 
 void keycodeInsert(unsigned char scancode)
 {
+	set_tone_pattern(TONE_KEYPRESS);
 	KBD_ringBufferPushNonBlocking(&KBD_ringBuffer, KEYMAP[scancode]);
 }
 void keyboard_scan()
@@ -320,6 +355,7 @@ void keyboard_scan()
 
 }
 
+
 ISR(TIMER0_COMPA_vect)
 {
 	static uint16_t next=0;
@@ -337,6 +373,7 @@ ISR(TIMER0_COMPA_vect)
 
 		}
 		keyboard_scan();
+    tone_generate();
 	}
 	if (SPIState.VFD_timer)
 	{
@@ -919,7 +956,7 @@ void init(void)
 
 
 	// Set MOSI, SCK, SSs, and reset to output.  also set PB2, which is SPI SS. needs to be output for master mode to work.  mabe move one of our SSs here later 
-	DDRB = (1<<NFC_SS)|(1<<VFD_RESET__NFC_WAKE)|(1<<MOSI)|(1<<SCK)|(1<<SPI_SS_UNUSED);
+	DDRB = (1<<NFC_SS)|(1<<VFD_RESET__NFC_WAKE)|(1<<MOSI)|(1<<SCK)|(1<<SPKR_OC1B);
 	DDRD = (1<<VFD_SS);
 	PORTD = ~(1<<VFD_SS);
 
@@ -953,6 +990,11 @@ void init(void)
 	deciSecs=0;
 	ticks50khz=0;
 
+	//set up Timer/Counter1 Compare Match B to toggle for speaker
+	TCCR1A = (1<<COM1B0);
+	TCCR1B = (1<<WGM12)|(1<<CS11);// for 20Mhz/8
+	TCCR1C = 0;
+  OCR1B=0;
 
 	stdout = stdin = &vfd_str;
 	stderr = &log_str;
@@ -1020,18 +1062,20 @@ uint8_t pkt_count = 0;
                        }
                        else if(key=='#')
                        {
-                               if(n==1234)
-                               {
-                                   uint8_t txBuffer[7];
-                                   txBuffer[MRBUS_PKT_LEN] = 7;
-		txBuffer[MRBUS_PKT_TYPE] = 'C';
-		txBuffer[6]  = 50;
-		txBuffer[MRBUS_PKT_DEST] = 0x10;
-		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-                               cvprintf(VFDCOMMAND_CLEARHOME "Open");
-		                }
-                               n=0;
+
+												if(n==1234)
+												{
+													uint8_t txBuffer[7];
+													txBuffer[MRBUS_PKT_LEN] = 7;
+													txBuffer[MRBUS_PKT_TYPE] = 'C';
+													txBuffer[6]  = 50;
+													txBuffer[MRBUS_PKT_DEST] = 0x10;
+													txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+													mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+													cvprintf(VFDCOMMAND_CLEARHOME "Open");
+													set_tone_pattern(TONE_OPEN);
+												}
+												n=0;
                        }
                        else
                        {
