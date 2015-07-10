@@ -1111,10 +1111,14 @@ void cheesyUI()
 	static uint8_t id=0;
 	static uint32_t pin=0;
 	static int16_t timer=0;
+	static int16_t lastupdate=0;
+  static uint16_t fail_timeout=10;
 
 	if (KBD_ringBufferDepth(&KBD_ringBuffer))
 	{
 		unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
+    if ((state==-1) && (deciSecs - timer < fail_timeout))
+			return;
 		if (state<0)//in open or fail message state and button pushed, get back to 0
 		{	
 			state=0;pin=0;id=0;
@@ -1134,6 +1138,9 @@ void cheesyUI()
 				state=-1;pin=0;id=0;
 				updateCheesyUI(state, id, 0, deciSecs - timer, 1);
 				set_tone_pattern(TONE_FAIL);
+				fail_timeout*=2;
+				if (fail_timeout>200)
+					fail_timeout=200;
 				return;
 			}
 
@@ -1141,6 +1148,7 @@ void cheesyUI()
 			state=-2;pin=0;id=0;
 			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
 			set_tone_pattern(TONE_OPEN);
+			fail_timeout=10;
 			uint8_t txBuffer[7];
 			txBuffer[MRBUS_PKT_LEN] = 7;
 			txBuffer[MRBUS_PKT_TYPE] = 'C';
@@ -1170,7 +1178,11 @@ void cheesyUI()
 			return;
 	}
 
-	if ((((state >0)||(state ==-1)) && (deciSecs - timer > 50)) || ((state ==-2) && (deciSecs - timer > LOCK_OPEN_TIME)))
+	if (
+	((state >0) && (deciSecs - timer > 50))
+|| ((state ==-1) && (deciSecs - timer > (fail_timeout<50?50:fail_timeout))) 
+|| ((state ==-2) && (deciSecs - timer > LOCK_OPEN_TIME))
+	)
 	{
 		state=0;pin=0;id=0;
 		set_tone_pattern(TONE_TIMEOUT);
@@ -1178,9 +1190,13 @@ void cheesyUI()
 		return;
 	}
 
-	if(deciSecs - timer > 5)
+	if(deciSecs - lastupdate > 5)
 	{
+		lastupdate = deciSecs;
 		updateCheesyUI(state, id, 0, deciSecs - timer, 0);
+		fail_timeout--;
+		if (fail_timeout<10)
+			fail_timeout=10;
 	}
 
 }
