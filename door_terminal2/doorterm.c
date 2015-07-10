@@ -39,6 +39,20 @@ LICENSE:
 #include "vfd.h"
 
 
+typedef struct {
+	uint8_t len;
+	uint32_t num;
+} PINEntry; 
+
+PINEntry const PINS[] = {
+/*00*/{4,1234},
+/*01*/{5,12345},
+/*02*/{0,676767},
+/*03*/{9,999999999},
+};
+
+#define LOCK_OPEN_TIME 100
+
 uint8_t mrbus_dev_addr = 0;
 
  PGM_P fatalError = 0;
@@ -194,8 +208,9 @@ typedef struct {
 	uint16_t period;
 } ToneEntry; 
 
-ToneEntry *tonePointer=NULL;
+ToneEntry const * tonePointer=NULL;
 uint8_t toneTimer;
+
 
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
@@ -258,10 +273,12 @@ uint8_t vfdtrysend()
 	return 0;
 }
 
-ToneEntry TONE_KEYPRESS[] = {{2,2000},{0,0}};
-ToneEntry TONE_OPEN[] = {{20,2000},{20,1600},{0,0}};
+ToneEntry const TONE_KEYPRESS[] = {{2,2000},{0,0}};
+ToneEntry const TONE_OPEN[] = {{20,2000},{20,1600},{20,1400},{0,0}};
+ToneEntry const TONE_FAIL[] = {{20,2200},{2,10},{20,2200},{0,0}};
+ToneEntry const TONE_TIMEOUT[] = {{2,3000},{0,0}};
 
-void set_tone_pattern(ToneEntry *t)
+void set_tone_pattern(ToneEntry const * const t)
 {
 	ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
 	{
@@ -1033,57 +1050,159 @@ void init(void)
 }
 
 
+void updateCheesyUI(int8_t state, uint8_t id, uint8_t key, uint8_t time, uint8_t newstate)
+{
+	int length = 0;
+	char buf[100];
+
+	if(newstate)
+		length += sprintf_P (buf+length, PSTR(VFDCOMMAND_CLEARHOME VFDCOMMAND_BRIGHTNESS(8) ));
+	else
+		length += sprintf_P (buf+length, PSTR(VFDCOMMAND_HOME VFDCOMMAND_BRIGHTNESS(8) ));
+
+	if (state >=0)
+	{
+		uint8_t r = 128;
+		uint8_t g = 128;
+		uint8_t b = 255;
+
+		length += sprintf_P (buf+length, PSTR("\x1fL\x10%c%c%cEnter ID & Pass: "), b & 0xf0, g & 0xf0, r & 0xf0);
+		if (state>=1)
+			length += sprintf_P (buf+length, PSTR("%d "), state>=2?id/10:id);
+		else
+			length += sprintf_P (buf+length, PSTR("_ "));
+
+		if (state>=2)
+			length += sprintf_P (buf+length, PSTR("%d "), id%10);
+		else
+			length += sprintf_P (buf+length, PSTR("_ "));
+
+		int8_t i;
+		for(i=2;i+1<state;i++)
+			length += sprintf_P (buf+length, PSTR("* "));
+		if (state>=3)
+		{
+			if (key==0)
+				key='*';
+			length += sprintf_P (buf+length, PSTR("%c"), key);
+		}
+	}
+	else if (state==-1)
+		length += sprintf_P (buf+length, PSTR("\x1fL\x10%c%c%cIncorrect"), 16 & 0xf0, 16 & 0xf0, 255 & 0xf0);
+	else if (state==-2)
+	{
+		length += sprintf_P (buf+length, PSTR("\x1fL\x10%c%c%c Open  ["), 16 & 0xf0, 255 & 0xf0, 16 & 0xf0);
+
+		uint8_t i;
+		for(i=0;i<10;i++)
+			buf[length++]=i<time*10/LOCK_OPEN_TIME?'*':' ';
+		length += sprintf_P (buf+length, PSTR("]\n   Push then Pull"));
+	}
+	else
+		length += sprintf_P (buf+length, PSTR(VFDCOMMAND_CLEARHOME "\x1fL\x10%c%c%cUI Err"), 255 & 0xf0, 255 & 0xf0, 255 & 0xf0);
+
+	cvprintf("%s", buf);
+}
+
+void cheesyUI()
+{
+	static int8_t state=0;
+	static uint8_t id=0;
+	static uint32_t pin=0;
+	static int16_t timer=0;
+
+	if (KBD_ringBufferDepth(&KBD_ringBuffer))
+	{
+		unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
+		if (state<0)//in open or fail message state and button pushed, get back to 0
+		{	
+			state=0;pin=0;id=0;
+			updateCheesyUI(state, id, 0, 0, 1);
+		}
+		timer=deciSecs;
+		if(key=='*')
+		{
+			state=0;pin=0;id=0;
+			updateCheesyUI(state, id, 0, 0, 1);
+			return;
+		}
+		else if(key=='#')
+		{
+			if ((state < 6) || (id >= sizeof(PINS)/sizeof(*PINS)) || (PINS[id].len+2!=state) || (PINS[id].num!=pin))
+			{
+				state=-1;pin=0;id=0;
+				updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+				set_tone_pattern(TONE_FAIL);
+				return;
+			}
+
+		  //succeed
+			state=-2;pin=0;id=0;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+			set_tone_pattern(TONE_OPEN);
+			uint8_t txBuffer[7];
+			txBuffer[MRBUS_PKT_LEN] = 7;
+			txBuffer[MRBUS_PKT_TYPE] = 'C';
+			txBuffer[6]  = LOCK_OPEN_TIME;
+			txBuffer[MRBUS_PKT_DEST] = 0x10;
+			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+			return;
+		}
+		else if(state<2) 
+		{
+			id=id*10+(key-'0');
+			state++;
+			updateCheesyUI(state, id, 0, 0, 0);
+			return;
+		}
+		else if (state <11)
+		{
+			pin=pin*10+(key-'0');
+			state++;
+			updateCheesyUI(state, id, key, 0, 0);
+			return;
+		}
+		  state=-1;pin=0;id=0;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+			set_tone_pattern(TONE_TIMEOUT);
+			return;
+	}
+
+	if ((((state >0)||(state ==-1)) && (deciSecs - timer > 50)) || ((state ==-2) && (deciSecs - timer > LOCK_OPEN_TIME)))
+	{
+		state=0;pin=0;id=0;
+		set_tone_pattern(TONE_TIMEOUT);
+		updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+		return;
+	}
+
+	if(deciSecs - timer > 5)
+	{
+		updateCheesyUI(state, id, 0, deciSecs - timer, 0);
+	}
+
+}
+
+
+
+
 int main(void)
 {
 ct_assert( (RDP_RECV_PKT_BUFFER_SIZE)<256 );//just a test.  if this fails, you have chosen buffer sizes that require you to change client_t.recvBufferCount to a uint16_t. I can't do it automatically since sizeof isn't available to the preprocessor
 
-
-uint8_t pkt_count = 0;
 		
 
 	// Application initialization
 	init();
 
-	cvprintf(VFDCOMMAND_CLEARHOME "Startup: Main Loop Top");
+	cvprintf(VFDCOMMAND_CLEARHOME "Starting Up...");
 
 
 	while (1)
 	{
 		wdt_reset();
-
-               if (KBD_ringBufferDepth(&KBD_ringBuffer))
-               {
-                       static unsigned int n=0;
-                       unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
-                       if(key=='*')
-                       {
-                               n=0;
-                               cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
-                       }
-                       else if(key=='#')
-                       {
-
-												if(n==1234)
-												{
-													uint8_t txBuffer[7];
-													txBuffer[MRBUS_PKT_LEN] = 7;
-													txBuffer[MRBUS_PKT_TYPE] = 'C';
-													txBuffer[6]  = 50;
-													txBuffer[MRBUS_PKT_DEST] = 0x10;
-													txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-													mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-													cvprintf(VFDCOMMAND_CLEARHOME "Open");
-													set_tone_pattern(TONE_OPEN);
-												}
-												n=0;
-                       }
-                       else
-                       {
-                               n=n*10+(key-'0');
-                               cvprintf(VFDCOMMAND_CLEARHOME "%u", n);
-                       }
-               }
-
+		cheesyUI();
 
 		if(fatalError)
 		{
