@@ -1123,6 +1123,7 @@ void cheesyUI()
 		{	
 			state=0;pin=0;id=0;
 			updateCheesyUI(state, id, 0, 0, 1);
+			return;
 		}
 		timer=deciSecs;
 		if(key=='*')
