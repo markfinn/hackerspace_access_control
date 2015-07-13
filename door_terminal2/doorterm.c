@@ -1145,20 +1145,19 @@ void cheesyUI()
 			return;
 		if (state<0)//in open or fail message state and button pushed, get back to 0
 		{	
+clear:
 			state=0;pin=0;id=0;
 			updateCheesyUI(state, id, 0, 0, 1);
 			return;
 		}
 		timer=deciSecs;
 		if(key=='*')
-		{
-			state=0;pin=0;id=0;
-			updateCheesyUI(state, id, 0, 0, 1);
-			return;
-		}
+			goto clear;
 		else if(key=='#')
 		{
-			if ((state < 2) || cheesyPinTest(id, state-2, pin))
+			if (state <= 2)
+				goto clear;
+			if (cheesyPinTest(id, state-2, pin))
 			{
 				state=-1;pin=0;id=0;
 				updateCheesyUI(state, id, 0, deciSecs - timer, 1);
