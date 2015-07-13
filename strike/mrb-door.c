@@ -43,6 +43,9 @@ PC5 should be attached to the strike switch such that when the door is open, it'
 uint8_t mrbus_dev_addr = 0;
 uint8_t pkt_count = 0;
 
+uint8_t doorSenseLatch=0;
+uint8_t rebooted=1;
+
 // ******** Start 100 Hz Timer - Very Accurate Version
 
 // Initialize a 100Hz timer for use in triggering events.
@@ -235,6 +238,18 @@ void PktHandler(void)
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 		goto PktIgnore;
 	}
+	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE])
+	{
+		doorSenseLatch=0;
+		rebooted=0;
+		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
+		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+		txBuffer[MRBUS_PKT_LEN] = 6;
+		txBuffer[MRBUS_PKT_TYPE] = 'z';
+		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;
+	}
+
 
 	// FIXME:  Insert code here to handle incoming packets specific
 	// to the device.
@@ -259,6 +274,7 @@ void init(void)
 	
 	// Clear watchdog (in the case of an 'X' packet reset)
 	MCUSR = 0;
+#define ENABLE_WATCHDOG
 #ifdef ENABLE_WATCHDOG
 	// If you don't want the watchdog to do system reset, remove this chunk of code
 	wdt_reset();
@@ -340,6 +356,9 @@ int main(void)
 		// Handle any packets that may have come in
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
+	
+		if(PINC & _BV(DOOR_SENSOR))
+			doorSenseLatch=1;
 					
 
 		if (doorTimeout > 0)
@@ -356,7 +375,9 @@ int main(void)
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_LEN] = 9;
 			txBuffer[5] = 'S';
-			txBuffer[6] = (PINC & _BV(DOOR_SENSOR))?0x01:0x00;
+			txBuffer[6] = ((PINC & _BV(DOOR_SENSOR))?0x01:0x00)
+					|(doorSenseLatch?0x02:0x00)
+					|(rebooted?0x04:0x00);
 			txBuffer[7] = doorTimeout;
 			txBuffer[8] = busVoltage;
 
