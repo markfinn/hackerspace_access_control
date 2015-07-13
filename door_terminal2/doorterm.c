@@ -39,17 +39,6 @@ LICENSE:
 #include "vfd.h"
 
 
-typedef struct {
-	uint8_t len;
-	uint32_t num;
-} PINEntry; 
-
-PINEntry const PINS[] = {
-/*00*/{4,1234},
-/*01*/{5,12345},
-/*02*/{0,676767},
-/*03*/{9,999999999},
-};
 
 #define LOCK_OPEN_TIME 100
 
@@ -689,6 +678,26 @@ uint8_t i;
 
 }
 
+void cheesyPinGet(uint8_t id, uint8_t *rlen, uint32_t *rpin)
+{
+	uint8_t len;
+	uint32_t pin=eeprom_read_dword((const uint32_t*)(100+4*id));
+	for(len=9;len&&!(pin&1);len--,pin>>=1)
+		;
+	pin>>=1;
+	*rlen=len;
+	*rpin=pin;
+}
+
+void cheesyPinSet(uint8_t id, uint8_t len, uint32_t pin)
+{
+	pin<<=1;
+	pin|=1;
+	pin<<=9-len;
+	eeprom_write_dword((uint32_t*)(100+4*id), pin);
+}
+
+
 void PktHandler(void)
 {
 	uint8_t i;
@@ -1105,6 +1114,21 @@ void updateCheesyUI(int8_t state, uint8_t id, uint8_t key, uint8_t time, uint8_t
 	cvprintf("%s", buf);
 }
 
+uint8_t cheesyPinTest(uint8_t id, uint8_t len, uint32_t pin)
+{
+	if (len<4)
+		return 1;
+	uint8_t clen;
+	uint32_t cpin;
+	cheesyPinGet(id, &clen, &cpin);
+	if ((clen!=len)||(cpin!=pin))
+		return 2;
+
+	return 0;
+
+}
+
+
 void cheesyUI()
 {
 	static int8_t state=0;
@@ -1134,7 +1158,7 @@ void cheesyUI()
 		}
 		else if(key=='#')
 		{
-			if ((state < 6) || (id >= sizeof(PINS)/sizeof(*PINS)) || (PINS[id].len+2!=state) || (PINS[id].num!=pin))
+			if ((state < 2) || cheesyPinTest(id, state-2, pin))
 			{
 				state=-1;pin=0;id=0;
 				updateCheesyUI(state, id, 0, deciSecs - timer, 1);
