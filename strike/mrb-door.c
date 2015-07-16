@@ -46,6 +46,19 @@ uint8_t pkt_count = 0;
 uint8_t doorSenseLatch=0;
 uint8_t rebooted=1;
 
+volatile uint8_t doorTimeout=0;
+uint8_t doorSenseReLocksState=0;
+/*
+0 don't act special
+1 going to relock, door has not been seen closed
+2 going to relock, door has been seen closed
+3 going to relock, door has been seen closed then open and the timer was shunted down to .2 Secs or less
+*/
+
+uint8_t forceStatus=0;
+uint8_t forceStatusState=0;
+
+
 // ******** Start 100 Hz Timer - Very Accurate Version
 
 // Initialize a 100Hz timer for use in triggering events.
@@ -57,7 +70,6 @@ uint8_t rebooted=1;
 volatile uint8_t ticks;
 volatile uint16_t decisecs=0;
 volatile uint16_t update_decisecs=10;
-volatile uint8_t doorTimeout=0;
 
 void initialize100HzTimer(void)
 {
@@ -226,16 +238,19 @@ void PktHandler(void)
 		while(1);  // Force a watchdog reset
 		sei();
 	}
-	else if ('C' == rxBuffer[MRBUS_PKT_TYPE] && 0xFF != rxBuffer[MRBUS_PKT_SRC])
+	else if ('C' == rxBuffer[MRBUS_PKT_TYPE] && 0xFF != rxBuffer[MRBUS_PKT_SRC] && rxBuffer[MRBUS_PKT_LEN]==8)
 	{
 		doorTimeout = rxBuffer[6];
+		doorSenseReLocksState = rxBuffer[7]&1;
 		// Version
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
-		txBuffer[MRBUS_PKT_LEN] = 7;
+		txBuffer[MRBUS_PKT_LEN] = 8;
 		txBuffer[MRBUS_PKT_TYPE] = 'c';
 		txBuffer[6]  = doorTimeout;
+		txBuffer[7]  = doorSenseReLocksState;
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		forceStatus=1;
 		goto PktIgnore;
 	}
 	else if ('Z' == rxBuffer[MRBUS_PKT_TYPE])
@@ -356,32 +371,51 @@ int main(void)
 		if (mrbusPktQueueDepth(&mrbusRxQueue))
 			PktHandler();
 	
-		if(PINC & _BV(DOOR_SENSOR))
+		uint8_t doorOpen = PINC & _BV(DOOR_SENSOR);
+		if(doorOpen)
 			doorSenseLatch=1;
 					
 
 		if (doorTimeout > 0)
+		{
+			if ((doorSenseReLocksState==1) && !doorOpen)
+				doorSenseReLocksState=2;
+			else if ((doorSenseReLocksState==2) && doorOpen)
+			{
+				doorSenseReLocksState=3;
+				if (doorTimeout > 2)
+					doorTimeout=2;
+			}
 			energizeDoorStrike();
+		}
 		else
 			deenergizeDoorStrike();
 
+		uint8_t newforceStatusState=(doorOpen?1:0)|(doorTimeout?2:0);
+		if (forceStatusState!=newforceStatusState)
+			forceStatus=1;
+		forceStatusState=newforceStatusState;
 
-		if (decisecs >= update_decisecs && !(mrbusPktQueueFull(&mrbusTxQueue)))
+
+		if ((forceStatus || (decisecs >= update_decisecs)) && !(mrbusPktQueueFull(&mrbusTxQueue)))
 		{
 			uint8_t txBuffer[MRBUS_BUFFER_SIZE];
 
+
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
-			txBuffer[MRBUS_PKT_LEN] = 9;
+			txBuffer[MRBUS_PKT_LEN] = 10;
 			txBuffer[5] = 'S';
-			txBuffer[6] = ((PINC & _BV(DOOR_SENSOR))?0x01:0x00)
+			txBuffer[6] = (doorOpen?0x01:0x00)
 					|(doorSenseLatch?0x02:0x00)
 					|(rebooted?0x04:0x00);
 			txBuffer[7] = doorTimeout;
-			txBuffer[8] = busVoltage;
+			txBuffer[8] = doorSenseReLocksState;
+			txBuffer[9] = busVoltage;
 
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
 			decisecs = 0;
+			forceStatus=0;
 		}	
 
 		if (mrbusPktQueueDepth(&mrbusTxQueue))

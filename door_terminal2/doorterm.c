@@ -1198,9 +1198,10 @@ clear:
 			set_tone_pattern(TONE_OPEN);
 			fail_timeout=30;
 			uint8_t txBuffer[7];
-			txBuffer[MRBUS_PKT_LEN] = 7;
+			txBuffer[MRBUS_PKT_LEN] = 8;
 			txBuffer[MRBUS_PKT_TYPE] = 'C';
 			txBuffer[6]  = LOCK_OPEN_TIME;
+			txBuffer[7]  = 1;
 			txBuffer[MRBUS_PKT_DEST] = 0x10;
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
