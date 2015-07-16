@@ -39,6 +39,16 @@ LICENSE:
 #include "vfd.h"
 
 
+typedef struct {
+	uint8_t len;
+	uint32_t num;
+} PINEntry; 
+
+PINEntry const PINS[] = {
+/*00*/{4,1234},
+/*01*/{0,12343},
+/*02*/{9,999999999}
+};
 
 #define LOCK_OPEN_TIME 100
 
@@ -679,6 +689,20 @@ uint8_t i;
 }
 
 void cheesyPinGet(uint8_t id, uint8_t *rlen, uint32_t *rpin)
+{
+	if (id >= sizeof(PINS)/sizeof(*PINS))
+	{
+		*rlen=0;
+		*rpin=0;
+	}
+	else
+	{
+		*rlen=PINS[id].len;
+		*rpin=PINS[id].num;
+	}
+
+}
+void cheesyPinGetx(uint8_t id, uint8_t *rlen, uint32_t *rpin)
 {
 	uint8_t len;
 	uint32_t pin=eeprom_read_dword((const uint32_t*)(100+4*id));
