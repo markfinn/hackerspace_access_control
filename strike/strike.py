@@ -5,7 +5,7 @@ import argparse
 import os
 import struct
 
-sys.path.insert(0, '../mrbus_bootloader')
+sys.path.insert(0, '../../mrbus_bootloader')
 import mrbus
 
 

@@ -37,7 +37,7 @@ BOOTSTART = 0x7000  #0x3800 in words
 
 GITREV := 'GIT_REV=0x$(shell git rev-parse --short=6 HEAD)L'
 
-MRBOOTPATH = ../../MRBus-Bootloader
+MRBOOTPATH = ../../mrbus_bootloader
 BUSLOAD = python $(MRBOOTPATH)/load.py -p /dev/ttyUSB0 -a 0xfe -d 0x10
 
 MRBUS_DIRECTORY=../mrbus2/src

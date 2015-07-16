@@ -1016,7 +1016,7 @@ void init(void)
 	
 	// Clear watchdog (in the case of an 'X' packet reset)
 	MCUSR = 0;
-#define ENABLE_WATCHDOG
+
 #ifdef ENABLE_WATCHDOG
 	// If you don't want the watchdog to do system reset, remove this chunk of code
 	wdt_reset();
