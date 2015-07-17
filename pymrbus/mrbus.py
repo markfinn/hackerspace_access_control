@@ -110,6 +110,9 @@ class mrbus(object):
   def pumpout(self):
     self.pump(duration=0, eager=True)
 
+
+###imperative stuff below here
+
   def testnode(self, addr, replyto=None, wait=2):
     found=False
 

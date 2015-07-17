@@ -1185,7 +1185,7 @@ void cheesyUI()
 			txBuffer[6] = uniq;
 			txBuffer[7]  = 0x10;//address of strike to unlock
 			txBuffer[8]  = id;
-			*(uint32_t*)(txBuffer+9) = PinLenEncode(state-2, pin);
+			*(uint32_t*)(txBuffer+9) = pin;
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
@@ -1225,11 +1225,12 @@ clear:
 			}
 			txBuffer[7]  = 0x10;//address of strike to unlock
 			txBuffer[8]  = id;
-			*(uint32_t*)(txBuffer+9) = PinLenEncode(state-2, pin);
+			pin = PinLenEncode(state-2, pin);
+			*(uint32_t*)(txBuffer+9) = pin;
 			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
-			state=-3;pin=0;id=0;
+			state=-3;
 			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
 			return;
 		}

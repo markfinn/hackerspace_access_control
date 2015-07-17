@@ -59,6 +59,18 @@ class node(object):
   def sendpkt(self, data):
     self.mrb.sendpkt(self.addr, data)
 
+
+  def pump(self, duration=None, until=None, eager=False):
+    self.mrb.pump(duration, until, eager)
+
+  def pumpout(self):
+    self.mrb.pumpout()
+
+
+
+###imperative stuff below here
+
+
   def getfilteredpkt(self, f, duration=None, until=None):
     pkt=[None]
     def h(p):
@@ -91,13 +103,6 @@ class node(object):
       if d != None:
         return d
     return None
-
-
-  def pump(self, duration=None, until=None, eager=False):
-    self.mrb.pump(duration, until, eager)
-
-  def pumpout(self):
-    self.mrb.pumpout()
 
 import serial
 import sys

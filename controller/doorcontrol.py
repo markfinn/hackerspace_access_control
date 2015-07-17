@@ -5,7 +5,7 @@ import argparse
 import os
 import struct
 
-sys.path.insert(0, '../../mrbus_bootloader')
+sys.path.insert(0, '../pymrbus')
 import mrbus
 
 
@@ -63,41 +63,33 @@ def run(pintest):
 
   def authreqhandler(p):
     if p.cmd==ord('O'):
-      print 'authreq:', p
+#      print 'authreq:', p
 
-      id, pin = p.data[2], PinLenDecode(sum(p.data[3+i]<<(8*i) for i in xrange(4)))
+      uniq, strike, id, pin =  p.data[0], p.data[1], p.data[2], PinLenDecode(sum(p.data[3+i]<<(8*i) for i in xrange(4)))
       if pintest(id, pin):
-        nk.sendpkt(['o', p.data[0], 1, 100])
-        openit=p.data[1]
+        #ignores requested strike...
+        nk.sendpkt(['o', uniq, 1, 100])
+        ns.sendpkt(['C', 100, 1])
       else:
-        nk.sendpkt(['o', p.data[0], 0, 100])
+        nk.sendpkt(['o', uniq, 0, 100])
+        #cache the result for a while and by addr/uniq
+        #set up rety handlers
+        #make doorterm.c monitor the strike status and flip to open (and stop the O send) state, also end open state when door done.
 
       return True #eat packet
     return False #dont eat packet
+
   nk.install(authreqhandler, 0)
 
 
   mrb.pumpout()
-#  n.sendpkt()
   while 1:
     mrb.pump()
-    if openit:
-      print 'c'
-      ns.doUntilReply(['C', 100, 1], rep=None, delay=.3, timeout=2)
-      print 'd'
-      openit=None
-
-#    print n.gettypefilteredpktdata('S', 3)
-
-
+ 
 #5c->* O [uinq], 10, id,pin4enc
-
 #FE->5c o uinq,0-fail, 1-success, 100
-
 #FE->10 ['C', 100, 1]
-
-
-
 if __name__ == '__main__':
   PINS = readPins('../door_terminal2/userpins.h')
   run(lambda id,pin: id in PINS and PINS[id] == pin)
+
