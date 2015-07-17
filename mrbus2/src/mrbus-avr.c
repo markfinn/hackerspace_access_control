@@ -400,9 +400,9 @@ PktIgnore:
 	{
 		// PING packet
 		i = txBuffer[MRBUS_PKT_LEN] = rxBuffer[MRBUS_PKT_LEN];
-		txBuffer[MRBUS_PKT_TYPE] = 'a';
 		while(i-->0)
 			txBuffer[i] = rxBuffer[i];
+		txBuffer[MRBUS_PKT_TYPE] = 'a';
 PktReply:
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
