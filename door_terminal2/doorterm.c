@@ -1197,7 +1197,7 @@ clear:
 			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
 			set_tone_pattern(TONE_OPEN);
 			fail_timeout=30;
-			uint8_t txBuffer[7];
+			uint8_t txBuffer[8];
 			txBuffer[MRBUS_PKT_LEN] = 8;
 			txBuffer[MRBUS_PKT_TYPE] = 'C';
 			txBuffer[6]  = LOCK_OPEN_TIME;
