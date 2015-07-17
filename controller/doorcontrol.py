@@ -49,8 +49,8 @@ def run(pintest):
     if p.cmd==ord('*'):
       print 'debug:', p
       return True #eat packet
-    else:
-      print 'packet:', p
+#    else:
+#      print 'packet:', p
     return False #dont eat packet
   mrb.install(debughandler, 0)
 
@@ -80,9 +80,7 @@ def run(pintest):
   mrb.pumpout()
 #  n.sendpkt()
   while 1:
-    print 'a'
     mrb.pump()
-    print 'b'
     if openit:
       print 'c'
       ns.doUntilReply(['C', 100, 1], rep=None, delay=.3, timeout=2)
