@@ -44,13 +44,13 @@ typedef struct {
 	uint32_t num;
 } PINEntry; 
 #include "userpins.h"
-/*
-PINEntry const PINS[] = {
-/*00*/{4,1234},
-/*01*/{0,12343},
-/*02*/{9,999999999}
-};
-*/
+
+//PINEntry const PINS[] = {
+///*00*/{4,1234},
+///*01*/{0,12343},
+///*02*/{9,999999999}
+//};
+
 
 #define LOCK_OPEN_TIME 100
 
