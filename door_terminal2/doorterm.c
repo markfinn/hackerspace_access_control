@@ -39,16 +39,6 @@ LICENSE:
 #include "vfd.h"
 
 
-typedef struct {
-	uint8_t len;
-	uint32_t num;
-} PINEntry; 
-
-PINEntry const PINS[] = {
-/*00*/{4,1234},
-/*01*/{0,12343},
-/*02*/{9,999999999}
-};
 
 #define LOCK_OPEN_TIME 100
 
@@ -210,7 +200,8 @@ typedef struct {
 ToneEntry const * tonePointer=NULL;
 uint8_t toneTimer;
 
-
+uint8_t compState=0;//0-rest,1-req ent,2-reply recvd fail,3-reply recv good
+uint8_t uniq=0;
 
 typedef enum {SPI_VFD, SPI_NFC, SPI_NFC_DISCARD} SPIsent_t;
 typedef enum {VFD_NEEDSTARTTIMEOUT, VFD_BUSYWAIT, VFD_OK, VFD_SEEMSSTUCK} VFDstate_t;
@@ -273,9 +264,11 @@ uint8_t vfdtrysend()
 }
 
 ToneEntry const TONE_KEYPRESS[] = {{2,2000},{0,0}};
+ToneEntry const TONE_TEST[] = {{200,2000},{0,0}};
 ToneEntry const TONE_OPEN[] = {{20,2000},{20,1600},{20,1400},{0,0}};
 ToneEntry const TONE_FAIL[] = {{20,2200},{2,10},{20,2200},{0,0}};
 ToneEntry const TONE_TIMEOUT[] = {{2,3000},{0,0}};
+ToneEntry const TONE_SILENCE[] = {{0,0}};
 
 void set_tone_pattern(ToneEntry const * const t)
 {
@@ -688,24 +681,9 @@ uint8_t i;
 
 }
 
-void cheesyPinGet(uint8_t id, uint8_t *rlen, uint32_t *rpin)
-{
-	if (id >= sizeof(PINS)/sizeof(*PINS))
-	{
-		*rlen=0;
-		*rpin=0;
-	}
-	else
-	{
-		*rlen=PINS[id].len;
-		*rpin=PINS[id].num;
-	}
-
-}
-void cheesyPinGetx(uint8_t id, uint8_t *rlen, uint32_t *rpin)
+void PinLenDecode(uint32_t pin, uint8_t *rlen, uint32_t *rpin)
 {
 	uint8_t len;
-	uint32_t pin=eeprom_read_dword((const uint32_t*)(100+4*id));
 	for(len=9;len&&!(pin&1);len--,pin>>=1)
 		;
 	pin>>=1;
@@ -713,12 +691,12 @@ void cheesyPinGetx(uint8_t id, uint8_t *rlen, uint32_t *rpin)
 	*rpin=pin;
 }
 
-void cheesyPinSet(uint8_t id, uint8_t len, uint32_t pin)
+uint32_t PinLenEncode(uint8_t len, uint32_t pin)
 {
 	pin<<=1;
 	pin|=1;
 	pin<<=9-len;
-	eeprom_write_dword((uint32_t*)(100+4*id), pin);
+	return pin;
 }
 
 
@@ -762,6 +740,15 @@ send:
 		txBuffer[MRBUS_PKT_DEST] = rxBuffer[MRBUS_PKT_SRC];
 		txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 		mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+		goto PktIgnore;	
+	}
+	else if ('o' == rxBuffer[MRBUS_PKT_TYPE]) 
+	{
+		// unlock req reply.
+		if (compState==1 && uniq == rxBuffer[6])
+		{
+			compState=2+(rxBuffer[7]&1);
+		}
 		goto PktIgnore;	
 	}
 	else if ('R' == rxBuffer[MRBUS_PKT_TYPE]) 
@@ -1132,25 +1119,21 @@ void updateCheesyUI(int8_t state, uint8_t id, uint8_t key, uint8_t time, uint8_t
 			buf[length++]=i<time*10/LOCK_OPEN_TIME?'*':' ';
 		length += sprintf_P (buf+length, PSTR("]\n   Push then Pull"));
 	}
+	else if (state<=-3)
+	{
+		length += sprintf_P (buf+length, PSTR("\x1fL\x10%c%c%cchecking"), 255 & 0xf0, 128 & 0xf0, 128 & 0xf0);
+
+		uint8_t i;
+		for(i=0;i<(-3-state);i++)
+			buf[length++]='.';
+		buf[length++]=0;
+	}
 	else
 		length += sprintf_P (buf+length, PSTR(VFDCOMMAND_CLEARHOME "\x1fL\x10%c%c%cUI Err"), 255 & 0xf0, 255 & 0xf0, 255 & 0xf0);
 
 	cvprintf("%s", buf);
 }
 
-uint8_t cheesyPinTest(uint8_t id, uint8_t len, uint32_t pin)
-{
-	if (len<4)
-		return 1;
-	uint8_t clen;
-	uint32_t cpin;
-	cheesyPinGet(id, &clen, &cpin);
-	if ((clen!=len)||(cpin!=pin))
-		return 2;
-
-	return 0;
-
-}
 
 
 void cheesyUI()
@@ -1162,15 +1145,64 @@ void cheesyUI()
 	static int16_t lastupdate=0;
 	static uint16_t fail_timeout=30;//warning... the doubling can be subverted by forcing a reboot
 
+	if (state<= -3)
+	{
+		if(compState==2)
+		{//fail reply
+			state=-1;pin=0;id=0;
+			timer=deciSecs;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+			set_tone_pattern(TONE_FAIL);
+			fail_timeout*=2;
+			if (fail_timeout>200)
+				fail_timeout=200;
+		}
+		else if(compState==3)
+		{//succed reply
+		  //open
+			state=-2;pin=0;id=0;
+			timer=deciSecs;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+			set_tone_pattern(TONE_OPEN);
+			fail_timeout=30;
+		}
+		else if (state <= -3-10)
+		{
+			//give up
+			set_tone_pattern(TONE_SILENCE);
+			compState=0;
+			state=0;pin=0;id=0;
+			timer=deciSecs;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
+		}
+		else if (deciSecs - timer >= 2)
+		{
+			//try again
+			set_tone_pattern(TONE_TEST);
+			uint8_t txBuffer[13];
+			txBuffer[MRBUS_PKT_LEN] = 13;
+			txBuffer[MRBUS_PKT_TYPE] = 'O';
+			txBuffer[6] = uniq;
+			txBuffer[7]  = 0x10;//address of strike to unlock
+			txBuffer[8]  = id;
+			*(uint32_t*)(txBuffer+9) = PinLenEncode(state-2, pin);
+			txBuffer[MRBUS_PKT_DEST] = 0xFF;
+			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
+			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+			state--;
+			timer=deciSecs;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 0);
+		}
+	}
 	if (KBD_ringBufferDepth(&KBD_ringBuffer))
 	{
 		unsigned char key = KBD_ringBufferPopNonBlocking(&KBD_ringBuffer);
 		if ((state==-1) && (deciSecs - timer < fail_timeout))
 			return;
-		if (state<0)//in open or fail message state and button pushed, get back to 0
+		if (state==-1 || state==-2)//in open or fail message state and button pushed, get back to 0
 		{	
 clear:
-			state=0;pin=0;id=0;
+			state=0;pin=0;id=0;compState=0;
 			updateCheesyUI(state, id, 0, 0, 1);
 			return;
 		}
@@ -1179,32 +1211,26 @@ clear:
 			goto clear;
 		else if(key=='#')
 		{
-			if (state <= 2)
+			if ((state>=0) && (state<= 2))
 				goto clear;
-			if (cheesyPinTest(id, state-2, pin))
+			//send req to computer O [uinq], id,pin,0x10
+			set_tone_pattern(TONE_TEST);
+			uint8_t txBuffer[13];
+			txBuffer[MRBUS_PKT_LEN] = 13;
+			txBuffer[MRBUS_PKT_TYPE] = 'O';
+			ATOMIC_BLOCK(ATOMIC_RESTORESTATE)
 			{
-				state=-1;pin=0;id=0;
-				updateCheesyUI(state, id, 0, deciSecs - timer, 1);
-				set_tone_pattern(TONE_FAIL);
-				fail_timeout*=2;
-				if (fail_timeout>200)
-					fail_timeout=200;
-				return;
+				compState=1;
+				txBuffer[6] = ++uniq;
 			}
-
-		  //succeed
-			state=-2;pin=0;id=0;
-			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
-			set_tone_pattern(TONE_OPEN);
-			fail_timeout=30;
-			uint8_t txBuffer[7];
-			txBuffer[MRBUS_PKT_LEN] = 8;
-			txBuffer[MRBUS_PKT_TYPE] = 'C';
-			txBuffer[6]  = LOCK_OPEN_TIME;
-			txBuffer[7]  = 1;
-			txBuffer[MRBUS_PKT_DEST] = 0x10;
+			txBuffer[7]  = 0x10;//address of strike to unlock
+			txBuffer[8]  = id;
+			*(uint32_t*)(txBuffer+9) = PinLenEncode(state-2, pin);
+			txBuffer[MRBUS_PKT_DEST] = 0xFF;
 			txBuffer[MRBUS_PKT_SRC] = mrbus_dev_addr;
 			mrbusPktQueuePush(&mrbusTxQueue, txBuffer, txBuffer[MRBUS_PKT_LEN]);
+			state=-3;pin=0;id=0;
+			updateCheesyUI(state, id, 0, deciSecs - timer, 1);
 			return;
 		}
 		else if(state<2) 

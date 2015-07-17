@@ -24,7 +24,10 @@ if __name__ == '__main__':
 
   n=mrb.getnode(0x10)
 
-  n.pumpout()
+#  n.pumpout()
   n.sendpkt(['C', 200])
-#  print n.gettypefilteredpktdata('v')
+#  n.sendpkt(['A'])
+  while 1:
+    pass
+#  print n.gettypefilteredpktdata('c')
 
