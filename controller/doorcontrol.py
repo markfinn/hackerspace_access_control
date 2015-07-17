@@ -9,9 +9,40 @@ sys.path.insert(0, '../../mrbus_bootloader')
 import mrbus
 
 
-if __name__ == '__main__':
+def readPins(fn):
+  import re
+  p={}
+  with open(fn, 'r') as f:
+    for l in f:
+      if l[-1]=='\n':
+        l=l[:-1]
+      if not l.strip():
+        continue
+      m=re.match(r'\s*/\*\s*(\d+)\s*\*/\s*{\s*(\d+)\s*,\s*(\d+)\s*}\s*,?\s*(?://.*)?', l)
+      if m:
+        try:
+          id,ln,pin = (int(x) for x in m.groups())
+          if ln==0:
+            continue
+          if ln>=4:
+            pinstr = ('%%0%uu'%ln)%pin
+            p[id] = pinstr
+            continue
+        except:
+          pass
+      print 'pin import from %s dropped line "%s"'%(fn, l)
+  return p
+
+def PinLenDecode(pin):
+  l=9
+  while l and not(pin&1):
+    l-=1
+    pin>>=1
+  pin>>=1;
+  return ('%%0%uu'%l)%pin
 
 
+def run(pintest):
   mrb = mrbus.mrbus('/dev/ttyUSB0', addr=0xfe)#, logall=True, logfile=sys.stdout, extra=True)
 
   def debughandler(p):
@@ -28,13 +59,6 @@ if __name__ == '__main__':
   nk=mrb.getnode(0x5C)
   openit=None
 
-  def PinLenDecode(pin):
-    l=9
-    while l and not(pin&1):
-      l-=1
-      pin>>=1
-    pin>>=1;
-    return ('%%0%uu'%l)%pin
 
 
   def authreqhandler(p):
@@ -42,7 +66,7 @@ if __name__ == '__main__':
       print 'authreq:', p
 
       id, pin = p.data[2], PinLenDecode(sum(p.data[3+i]<<(8*i) for i in xrange(4)))
-      if id in PINS and PINS[id] == pin:
+      if pintest(id, pin):
         nk.sendpkt(['o', p.data[0], 1, 100])
         openit=p.data[1]
       else:
@@ -76,3 +100,6 @@ if __name__ == '__main__':
 
 
 
+if __name__ == '__main__':
+  PINS = readPins('../door_terminal2/userpins.h')
+  run(lambda id,pin: id in PINS and PINS[id] == pin)
